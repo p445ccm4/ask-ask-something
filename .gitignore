@@ -4,3 +4,6 @@ __pycache__/
 venv/
 .DS_Store
 uat_results*.json
+*.xlsx
+*.xls
+*.csv

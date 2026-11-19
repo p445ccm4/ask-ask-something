@@ -1,0 +1,13 @@
+{
+  "sheet": "Testing Queries",
+  "header_row": 1,
+  "group_blank_id": false,
+  "columns": {
+    "id": "ID",
+    "question": "Queries",
+    "expected_answer": "Expected Answers",
+    "expected_behavior": null,
+    "expected_source": "Expected Source",
+    "remarks": "Remarks"
+  }
+}
