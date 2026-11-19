@@ -9,5 +9,11 @@
     "expected_behavior": null,
     "expected_source": "Expected Source",
     "remarks": "Remarks"
+  },
+  "output_columns": {
+    "actual_answer": "Actual Answers",
+    "actual_sources": "Actual Source Retrieved",
+    "status": null,
+    "review_comment": "Remarks"
   }
 }

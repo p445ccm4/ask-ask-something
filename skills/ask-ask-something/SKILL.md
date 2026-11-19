@@ -7,14 +7,14 @@ description: Use when onboarding an AI agent or chatbot to UAT testing, importin
 
 ## Overview
 
-End-to-end UAT toolkit for any HTTP/SSE AI agent (AskHR, AskLegal, AskIT, etc.): import business Excel UAT sheets, run concurrent multi-turn evaluations with Gemini LLM-as-a-Judge (`PASS=1.0`, `PARTIAL=0.5`, `FAIL=0.0`), iterate on failing turns, enforce full regression tests after every change, and export results to CSV.
+End-to-end UAT toolkit for any HTTP/SSE AI agent (AskHR, AskLegal, AskIT, etc.): import business Excel UAT sheets, run concurrent multi-turn evaluations with Gemini LLM-as-a-Judge (`PASS=1.0`, `PARTIAL=0.5`, `FAIL=0.0`), iterate on failing turns, enforce full regression tests after every change, and write results directly back into the original `.xlsx` format (or CSV).
 
 **When invoked as `/ask-ask-something` without a specific task**, present the 5 capabilities below and ask which step the user wants to start with:
 1. **Import Excel UAT Log** (`scripts/xlsx_to_uat.py inspect` → `import`)
 2. **Onboard New Agent** (create `scripts/uat/` config + domain rubric)
 3. **Run Concurrent UAT Batch** (`scripts/run_uat_batch.py`)
 4. **Debug Failing Cases & Run Regression** (targeted `--id`/`--turn` → `--runs 5` → full regression)
-5. **Export Results to CSV** (`scripts/xlsx_to_uat.py export`)
+5. **Write Results Back to Excel / Export CSV** (`scripts/xlsx_to_uat.py update-xlsx` or `export`)
 
 ## Where Project Files Live
 
@@ -43,7 +43,7 @@ Always store project-specific UAT files inside the **target agent's repo** (neve
 3. **Targeted Fix:** Edit code/prompt/retrieval, then re-test **only** failing IDs (`--id Q1,E003`; use `--turn N --from-results <prev.json>` to replay earlier turns).
 4. **Stability Check:** Run `--id <fixed_IDs> --runs 5` to confirm the fix holds under LLM/RAG non-determinism.
 5. **REGRESSION GATE (Required After Every Change):** Prompt and retrieval tweaks frequently break unrelated questions. **Always run the full `uat_questions.json` suite after every change** and verify previously-passing IDs did not regress before committing or deploying.
-6. **Sign-off Export:** Run `xlsx_to_uat.py export <results.json> -o <out.csv>` (UTF-8-BOM CSV for Excel).
+6. **Sign-off Export (Format-Preserving Excel):** Run `xlsx_to_uat.py update-xlsx <orig.xlsx> <results.json> --mapping scripts/uat/excel_mapping.json -o <updated.xlsx>` to write answers/sources/reviews straight back into the original workbook (preserving all tabs, styles, borders, and merges; pass the same path to overwrite in-place), or `export` for CSV.
 
 ## Quick Reference
 
@@ -56,6 +56,7 @@ Run `--help` on `scripts/run_uat_batch.py` or `scripts/xlsx_to_uat.py` for all f
 | **Full UAT / Regression** | `python3 <skill>/scripts/run_uat_batch.py --config scripts/uat/uat_config.json -i scripts/uat/uat_questions.json -o scripts/uat/results/uat_results.json` |
 | **Debug specific turn** | `... --id T001 --turn 3 --from-results scripts/uat/results/uat_results.json` |
 | **Variance check** | `... --id T001 --runs 5` |
+| **Write back to Excel** | `python3 <skill>/scripts/xlsx_to_uat.py update-xlsx <orig.xlsx> scripts/uat/results/uat_results.json --mapping scripts/uat/excel_mapping.json -o scripts/uat/results/UAT_updated.xlsx` |
 | **Export CSV** | `python3 <skill>/scripts/xlsx_to_uat.py export scripts/uat/results/uat_results.json -o scripts/uat/results/uat_results.csv` |
 
 ## Common Mistakes
