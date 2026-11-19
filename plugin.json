@@ -1,0 +1,10 @@
+{
+  "name": "agent-uat-eval",
+  "displayName": "Agent UAT Eval",
+  "description": "Concurrent multi-turn UAT batch runner and Gemini LLM-as-a-Judge workflow for testing and debugging AI agents.",
+  "suggestedPrompts": [
+    "Set up multi-turn UAT batch evaluation for this AI agent repo",
+    "Run the UAT suite and diagnose failing turns",
+    "Run 5 stability iterations on failing UAT IDs"
+  ]
+}

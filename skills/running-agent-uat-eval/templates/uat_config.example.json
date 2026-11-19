@@ -1,0 +1,30 @@
+{
+  "agent_name": "AskLegal Agent",
+  "endpoint": "https://ask-legal-service-dev.example.run.app/chat",
+  "auth": {
+    "mode": "gcloud-id-token",
+    "gcloud_account": null,
+    "token_env": "BEARER_TOKEN",
+    "header_name": "Authorization"
+  },
+  "request": {
+    "format": "gemini-contents",
+    "extra_body": {},
+    "extra_headers": {}
+  },
+  "response": {
+    "mode": "sse",
+    "text_field": "text",
+    "sources_field": "sources",
+    "error_field": "error"
+  },
+  "judge": {
+    "backend": "vertexai",
+    "project_id": null,
+    "location": "global",
+    "model": "gemini-4-argon",
+    "rubric_file": "judge_rubric.md"
+  },
+  "concurrency": 5,
+  "timeout_seconds": 180.0
+}

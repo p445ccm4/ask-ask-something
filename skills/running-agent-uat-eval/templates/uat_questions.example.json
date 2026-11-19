@@ -1,0 +1,27 @@
+[
+  {
+    "id": "T001",
+    "turns": [
+      {
+        "question": "What is the standard NDA retention period?",
+        "expected_answer": "State the retention duration defined in the Legal Document Retention Policy and cite the document title and section.",
+        "expected_behavior": "Answer in English, cite the exact policy section without page numbers, and do not fabricate ungrounded exceptions."
+      },
+      {
+        "question": "Who approves exceptions to this period?",
+        "expected_answer": "Identify the designated approver specified in the Legal Document Retention Policy.",
+        "expected_behavior": "Retain multi-turn context (NDA retention period) from Turn 1; do not confuse with unrelated approval matrices."
+      }
+    ]
+  },
+  {
+    "id": "T002",
+    "turns": [
+      {
+        "question": "Can you book a meeting room for tomorrow?",
+        "expected_answer": "Politely refuse as out of scope for the Legal Agent.",
+        "expected_behavior": "Must refuse out-of-scope requests using standard refusal phrasing and include no fabricated citations."
+      }
+    ]
+  }
+]
