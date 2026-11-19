@@ -1,6 +1,6 @@
-# Agent UAT Eval
+# AskAsk* (`ask-ask-something`)
 
-A reusable Agent Skill and Antigravity Plugin for running **concurrent, multi-turn UAT batch evaluations** against any HTTP/SSE AI agent endpoint with **Gemini LLM-as-a-Judge** grading.
+A reusable Agent Skill and Antigravity Plugin for running **concurrent, multi-turn UAT batch evaluations** against any HTTP/SSE AI agent endpoint (AskHR, AskLegal, AskIT, etc.) with **Gemini LLM-as-a-Judge** grading.
 
 ## Install
 
@@ -8,20 +8,20 @@ A reusable Agent Skill and Antigravity Plugin for running **concurrent, multi-tu
 Works with Antigravity, Gemini CLI, Claude Code, Cursor, and Codex:
 
 ```bash
-npx skills add git@github.com:p445ccm4/agent-uat-eval.git
+npx skills add git@github.com:p445ccm4/ask-ask-something.git
 ```
 
 ### Option 2: Install as an Antigravity Plugin
 Clone into your global Antigravity plugins directory:
 
 ```bash
-git clone git@github.com:p445ccm4/agent-uat-eval.git ~/.gemini/config/plugins/agent-uat-eval
+git clone git@github.com:p445ccm4/ask-ask-something.git ~/.gemini/config/plugins/ask-ask-something
 ```
 
 Or workspace-scoped inside a project repo:
 
 ```bash
-git clone git@github.com:p445ccm4/agent-uat-eval.git .agents/plugins/agent-uat-eval
+git clone git@github.com:p445ccm4/ask-ask-something.git .agents/plugins/ask-ask-something
 ```
 
 ## What's Included
