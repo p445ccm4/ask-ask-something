@@ -2,8 +2,14 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+node_modules/
+.next/
 .DS_Store
 uat_results*.json
 *.xlsx
 *.xls
 *.csv
+app/**/.env
+app/**/.env.local
+app/agent-service/.data/
+

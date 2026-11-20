@@ -1,0 +1,147 @@
+@import "tailwindcss";
+
+:root {
+  /* BEA Core Brand Colors (Solar Gradient & Accents) */
+  --bea-primary-red: #ED171F;
+  --bea-red-orange: #EA4120;
+  --bea-vibrant-orange: #FF8F00;
+  --bea-golden-yellow: #FFCC00;
+  --bea-soft-coral: #F8A2A5;
+  --bea-deep-burgundy: #640000;
+
+  /* BEA Secondary Professional Colors */
+  --bea-deep-teal: #004742;
+  --bea-emerald-green: #29BA74;
+  --bea-hyperlink-blue: #0563C1;
+
+  /* BEA Neutrals & Backgrounds */
+  --bea-text-primary: #595959;
+  --bea-text-secondary: #797979;
+  --bea-canvas-bg: #F2F2F2;
+  --bea-card-bg: #FFFFFF;
+  --bea-border-light: #DEDEDE;
+
+  --background: var(--bea-card-bg);
+  --foreground: var(--bea-text-primary);
+  --solar-red: var(--bea-primary-red);
+  --solar-orange: var(--bea-vibrant-orange);
+  --solar-yellow: var(--bea-golden-yellow);
+
+  /* "Solar on White": words have gradient on a white background (Red on left -> Yellow on right) */
+  --solar-on-white-gradient: linear-gradient(
+    90deg,
+    #ED171F 0%,
+    #EA4120 0%,
+    #FF8F00 100%,
+    #FFCC00 100%
+  );
+
+  /* "White on Solar": white words on a solar gradient background (Yellow on left -> Red on right) */
+  --white-on-solar-gradient: linear-gradient(
+    90deg,
+    #FFCC00 0%,
+    #FF8F00 0%,
+    #EA4120 100%,
+    #ED171F 100%
+  );
+
+  --solar-gradient: var(--solar-on-white-gradient);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-solar-red: var(--bea-primary-red);
+  --color-solar-red-orange: var(--bea-red-orange);
+  --color-solar-orange: var(--bea-vibrant-orange);
+  --color-solar-yellow: var(--bea-golden-yellow);
+  --color-bea-coral: var(--bea-soft-coral);
+  --color-bea-burgundy: var(--bea-deep-burgundy);
+  --color-bea-teal: var(--bea-deep-teal);
+  --color-bea-emerald: var(--bea-emerald-green);
+  --color-bea-blue: var(--bea-hyperlink-blue);
+  --color-bea-text-primary: var(--bea-text-primary);
+  --color-bea-text-secondary: var(--bea-text-secondary);
+  --color-bea-canvas: var(--bea-canvas-bg);
+  --color-bea-card: var(--bea-card-bg);
+  --color-bea-border: var(--bea-border-light);
+  --font-sans: "Hando", Arial, Helvetica, sans-serif;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: "Hando", Arial, Helvetica, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
+}
+
+input[type="range"] {
+  touch-action: manipulation;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+}
+
+/* BEA "White on Solar": white text on yellow-to-red solar background */
+.white-on-solar,
+.bg-solar {
+  background-image: var(--white-on-solar-gradient);
+}
+
+.white-on-solar {
+  color: #FFFFFF;
+}
+
+/* BEA "Solar on White": red-to-yellow gradient text on white background */
+.solar-on-white,
+.text-solar {
+  background-image: var(--solar-on-white-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+@keyframes pill-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes view-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-pill-fade {
+  animation: pill-fade-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-view-fade-in {
+  animation: view-fade-in 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pill-fade,
+  .animate-view-fade-in {
+    animation: none;
+  }
+}
