@@ -2,20 +2,12 @@
 
 import React, { useState } from "react";
 import {
-  Eye,
   FolderPlus,
   GitBranch,
   Rocket,
-  Shield,
   ShieldCheck,
-  Zap,
 } from "lucide-react";
-import type {
-  ExecutionMode,
-  HealthStatus,
-  TargetEnv,
-  WorkspaceSummary,
-} from "@/lib/types";
+import type { TargetEnv, WorkspaceSummary } from "@/lib/types";
 
 interface HeaderBarProps {
   workspaces: WorkspaceSummary[];
@@ -26,9 +18,6 @@ interface HeaderBarProps {
     path: string;
     uat_path?: string;
   }) => Promise<void>;
-  mode: ExecutionMode;
-  onChangeMode: (mode: ExecutionMode) => void;
-  health: HealthStatus | null;
   onOpenGitDiff: () => void;
   onOpenDeploy: (env: TargetEnv) => void;
 }
@@ -38,9 +27,6 @@ export function HeaderBar({
   activeWorkspaceId,
   onSelectWorkspace,
   onAddWorkspace,
-  mode,
-  onChangeMode,
-  health,
   onOpenGitDiff,
   onOpenDeploy,
 }: HeaderBarProps) {
@@ -133,72 +119,9 @@ export function HeaderBar({
               )}
             </button>
           )}
-
-          {health?.sandbox_status && (
-            <span
-              className="hidden select-none items-center gap-1.5 rounded bg-bea-canvas px-2 py-1 text-[11px] font-medium text-bea-text-secondary xl:inline-flex"
-              title={
-                health.sandbox_status.unavailable_reason ||
-                "Linux kernel user-namespace sandbox is active"
-              }
-            >
-              <Shield
-                className={`h-3 w-3 ${
-                  health.sandbox_status.available ? "text-bea-emerald" : "text-solar-orange"
-                }`}
-              />
-              {health.sandbox_status.available ? "Sandbox Ready" : "Sandbox Unavailable"}
-            </span>
-          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          {/* 3-Way Execution Mode Toggle */}
-          <div
-            className="inline-flex rounded-xl border border-bea-border bg-bea-canvas p-0.5"
-            role="group"
-            aria-label="Antigravity execution mode"
-          >
-            <button
-              type="button"
-              onClick={() => onChangeMode("read_only")}
-              className={`inline-flex cursor-pointer items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
-                mode === "read_only"
-                  ? "bg-bea-card text-bea-blue shadow-xs ring-1 ring-bea-border"
-                  : "text-bea-text-secondary hover:text-neutral-800"
-              }`}
-            >
-              <Eye className="h-3.5 w-3.5" />
-              Read-Only
-            </button>
-            <button
-              type="button"
-              onClick={() => onChangeMode("ask_before_fix")}
-              className={`inline-flex cursor-pointer items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
-                mode === "ask_before_fix"
-                  ? "bg-bea-card text-solar-red-orange shadow-xs ring-1 ring-solar-orange/40"
-                  : "text-bea-text-secondary hover:text-neutral-800"
-              }`}
-            >
-              <ShieldCheck className="h-3.5 w-3.5" />
-              Ask-Before-Fix
-            </button>
-            <button
-              type="button"
-              onClick={() => onChangeMode("sandboxed_auto")}
-              className={`inline-flex cursor-pointer items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
-                mode === "sandboxed_auto"
-                  ? "bg-bea-card text-bea-teal shadow-xs ring-1 ring-bea-emerald/40"
-                  : "text-bea-text-secondary hover:text-neutral-800"
-              }`}
-            >
-              <Zap className="h-3.5 w-3.5" />
-              Sandboxed Auto
-            </button>
-          </div>
-
-          <div className="h-5 w-px bg-bea-border" />
-
           {/* Human-Only Deploy Push Controls */}
           <div className="flex items-center gap-1.5">
             <button

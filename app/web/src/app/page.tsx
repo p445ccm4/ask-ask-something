@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { AgentWorkbench } from "@/components/AgentWorkbench";
+import { AgentWorkbench, type ToolSummarizer } from "@ag-workbench/index";
 import { DeployModal } from "@/components/DeployModal";
 import { GitDiffPanel } from "@/components/GitDiffPanel";
 import { HeaderBar } from "@/components/HeaderBar";
@@ -17,6 +17,38 @@ import type {
   WorkspaceGitInfo,
   WorkspaceSummary,
 } from "@/lib/types";
+
+const ASK_QUICK_PROMPTS = [
+  "Summarize the current UAT pass/fail status and main failure patterns.",
+  "Inspect the system prompt and RAG retrieval code in this repository.",
+  "Show the current uncommitted git diff for this service.",
+];
+
+const askToolSummarizer: ToolSummarizer = (name, args) => {
+  if (name === "get_uat_case_detail") {
+    const caseId = typeof args?.case_id === "string" ? args.case_id.trim() : "";
+    return {
+      summary: caseId ? `Case ${caseId}` : "",
+      consumedKeys: ["case_id"],
+    };
+  }
+  if (name === "run_uat_check") {
+    const caseIds = typeof args?.case_ids === "string" ? args.case_ids.trim() : "";
+    const runs = typeof args?.runs === "number" ? args.runs : undefined;
+    const base = caseIds ? `Cases: ${caseIds}` : "Full UAT suite";
+    return {
+      summary: runs && runs > 1 ? `${base} (${runs}x)` : base,
+      consumedKeys: ["case_ids", "runs"],
+    };
+  }
+  if (name === "get_uat_summary") {
+    return { summary: "Workspace UAT overview" };
+  }
+  if (name === "get_git_diff") {
+    return { summary: "Scoped git diff" };
+  }
+  return null;
+};
 
 const DEFAULT_MODEL_OPTIONS: ModelOption[] = [
   { id: "", label: "Auto (gemini-4-hydrogen)" },
@@ -513,9 +545,6 @@ export default function WorkbenchPage() {
         activeWorkspaceId={activeWsId}
         onSelectWorkspace={setActiveWsId}
         onAddWorkspace={handleAddWorkspace}
-        mode={mode}
-        onChangeMode={setMode}
-        health={health}
         onOpenGitDiff={() => {
           if (activeWsId) loadGitDiff(activeWsId);
           setGitDrawerOpen(true);
@@ -579,6 +608,8 @@ export default function WorkbenchPage() {
           <AgentWorkbench
             workspaceName={activeWs?.name || "Workspace"}
             mode={mode}
+            onChangeMode={setMode}
+            sandboxStatus={health?.sandbox_status}
             availableModels={availableModels}
             selectedModel={selectedModel}
             onSelectModel={setSelectedModel}
@@ -591,6 +622,10 @@ export default function WorkbenchPage() {
             onSendMessage={(txt) => sendChatMessage(txt)}
             onStopStreaming={handleStopChat}
             onDecideApproval={handleDecideApproval}
+            emptyTitle={`Maintainer ready for ${activeWs?.name || "Workspace"}`}
+            emptyDescription="Inspect code, analyze failing UAT turns, apply sandboxed fixes, and verify regressions."
+            quickPrompts={ASK_QUICK_PROMPTS}
+            toolSummarizer={askToolSummarizer}
           />
         </div>
       </main>

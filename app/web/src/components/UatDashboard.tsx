@@ -16,7 +16,7 @@ import {
   XCircle,
 } from "lucide-react";
 import type { UatCaseResult, UatOverview } from "@/lib/types";
-import { MarkdownContent } from "./MarkdownContent";
+import { MarkdownContent } from "@ag-workbench/index";
 
 interface UatDashboardProps {
   workspaceId: string;

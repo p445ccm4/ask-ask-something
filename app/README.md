@@ -4,17 +4,19 @@ Web UI and Antigravity SDK backend living alongside the `ask-ask-something` plug
 
 ## Architecture
 
+- **`app/vendor/antigravity-workbench/`** (Git submodule: `p445ccm4/antigravity-workbench`):
+  - Provides the reusable `ag-workbench` Python package (`ApprovalBroker`, `ConversationStore`, `ActiveTurnRegistry`, `create_workbench_router`, execution policies) and React UI components (`AgentWorkbench`, `ApprovalCard`, `ExecutionModeToggle`, `MarkdownContent`, `backendClient`).
 - **`app/agent-service/`** (FastAPI + `google-antigravity`, port `8000`):
-  - Runs the Antigravity Python SDK directly with `skills_paths` pointing to `skills/` and `SessionContinuationMode.CREATE_OR_RESUME`.
-  - Exposes custom host tools (`get_uat_summary`, `get_uat_case_detail`, `run_uat_check`, `get_git_diff`) that reuse `skills/ask-ask-something/scripts/run_uat_batch.py` and `xlsx_to_uat.py`.
+  - Mounts `create_workbench_router` from `ag-workbench` with AskAsk*-specific host tools (`get_uat_summary`, `get_uat_case_detail`, `run_uat_check`, `get_git_diff`) that reuse `skills/ask-ask-something/scripts/run_uat_batch.py` and `xlsx_to_uat.py`.
   - Enforces 3 execution modes (`read_only`, `ask_before_fix` via `ApprovalBroker`, `sandboxed_auto` via `RunCommandConfig(enable_sandbox=True)`) while always blocking `git push` and destructive commands for the AI agent.
   - Provides a **human-only** `deploy_service` triggered strictly from the UI's **Deploy to DEV** and **Deploy to UAT** buttons (`git push origin main` scoped to the active service directory, preserving UAT's `src/config.py` during DEV → UAT promotion).
 - **`app/web/`** (Next.js App Router + BFF, port `3000`):
+  - Imports `AgentWorkbench` (including the 3-way execution mode toggle) and BFF proxy helpers from `app/vendor/antigravity-workbench/ui/src/`.
   - Proxies all JSON and SSE requests through `/api/*` route handlers so a single port (`3000`) serves the entire app in Cloud Shell Web Preview and provides a clean BFF seam for future auth or database persistence.
 
 ## First-Time Setup on Cloud Shell
 
-If you just cloned this repository, complete these one-time steps before running UAT or using the Maintainer Agent:
+If you just cloned this repository, ensure the submodule is initialized (`git submodule update --init --recursive`) and complete these one-time steps before running UAT or using the Maintainer Agent:
 
 1. **Verify prerequisites** (`uv`, Node.js/`npm`, and `gcloud` CLI):
    ```bash

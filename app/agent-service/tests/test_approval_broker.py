@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from ask_workbench.approval_broker import ApprovalBroker
+from ag_workbench.approval_broker import ApprovalBroker
 
 
 async def test_approval_broker_approve_flow() -> None:

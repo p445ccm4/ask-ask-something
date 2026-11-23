@@ -10,6 +10,7 @@ from ask_workbench.agent_runner import (
     is_destructive_command,
 )
 from ask_workbench.approval_broker import ApprovalBroker
+from ag_workbench.approval_broker import ApprovalBroker
 from ask_workbench.uat_service import UatService
 from ask_workbench.workspaces import WorkspaceEntry
 

@@ -1,4 +1,14 @@
-export type ExecutionMode = "read_only" | "ask_before_fix" | "sandboxed_auto";
+export type {
+  ChatMessage,
+  ConversationRecord,
+  ExecutionMode,
+  ModelOption,
+  PendingApprovalItem,
+  SandboxStatus,
+  ToolEvent,
+  WorkbenchHealthStatus as HealthStatus,
+} from "@ag-workbench/types";
+
 export type TargetEnv = "dev" | "uat";
 
 export interface WorkspaceSummary {
@@ -129,61 +139,4 @@ export interface UatOverview {
   result_files: string[];
   summary: UatSummaryStats;
   results_updated_at: number | null;
-}
-
-export interface ToolEvent {
-  type: "tool_call" | "tool_result";
-  id?: string;
-  name: string;
-  args?: Record<string, unknown>;
-  result?: string;
-  error?: string | null;
-}
-
-export interface PendingApprovalItem {
-  approval_id: string;
-  conversation_id: string;
-  tool_name: string;
-  args: Record<string, unknown>;
-  status: "pending" | "approved" | "denied";
-}
-
-export interface ModelOption {
-  id: string;
-  label: string;
-}
-
-export interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-  thought?: string;
-  tool_events?: ToolEvent[];
-  approvals?: PendingApprovalItem[];
-  mode?: ExecutionMode;
-  model?: string;
-  timestamp?: number;
-  streaming?: boolean;
-  cancelled?: boolean;
-  error?: string;
-}
-
-export interface ConversationRecord {
-  conversation_id: string;
-  workspace_id: string;
-  title: string;
-  created_at: number;
-  updated_at: number;
-  messages: ChatMessage[];
-}
-
-export interface HealthStatus {
-  status: string;
-  vertex_project_id: string;
-  vertex_location: string;
-  default_model?: string;
-  available_models?: ModelOption[];
-  sandbox_status: {
-    available: boolean;
-    unavailable_reason?: string | null;
-  } | null;
 }

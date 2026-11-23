@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any, Literal
 from fastapi import FastAPI, HTTPException, Query
@@ -8,17 +7,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from google.antigravity import Agent, CapabilitiesConfig, LocalAgentConfig
-from google.antigravity.types import RunCommandConfig
+from ag_workbench.approval_broker import ApprovalBroker
+from ag_workbench.router import create_workbench_router, sse_format
+from ag_workbench.runner import ActiveTurnRegistry, ConversationStore
 
-from .agent_runner import (
-    AVAILABLE_MODELS,
-    ActiveTurnRegistry,
-    ConversationStore,
-    ExecutionMode,
-    stream_agent_turn,
-)
-from .approval_broker import ApprovalBroker
+from .agent_runner import build_workbench_hooks
 from .config import Settings, get_settings
 from .deploy_service import TargetEnv, execute_deploy, preview_deploy
 from .uat_service import UatRunRequest, UatService
@@ -32,31 +25,11 @@ class AddWorkspaceRequest(BaseModel):
     env: str = "dev"
 
 
-class CreateConversationRequest(BaseModel):
-    workspace_id: str
-    title: str = "New Investigation"
-
-
-class ChatRequest(BaseModel):
-    workspace_id: str
-    message: str
-    mode: ExecutionMode = "read_only"
-    model: str | None = None
-
-
-class ApprovalDecisionRequest(BaseModel):
-    approved: bool
-
-
 class DeployExecuteRequest(BaseModel):
     target_env: TargetEnv
     commit_message: str
     selected_files: list[str] | None = None
     include_config_py: bool = False
-
-
-def _sse_format(payload: dict[str, Any]) -> str:
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -88,35 +61,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.conv_store = conv_store
     app.state.turn_registry = turn_registry
 
-    @app.get("/health")
-    async def health(check_sandbox: bool = Query(default=False)) -> dict[str, Any]:
-        sandbox_info: dict[str, Any] | None = None
-        if check_sandbox:
-            try:
-                probe_cfg = LocalAgentConfig(
-                    capabilities=CapabilitiesConfig(
-                        run_command_config=RunCommandConfig(enable_sandbox=True)
-                    ),
-                    vertex=True,
-                    project=cfg.resolved_vertex_project_id,
-                    location=cfg.vertex_location,
-                )
-                async with Agent(probe_cfg) as agy:
-                    st = agy.sandbox_status
-                    sandbox_info = {
-                        "available": bool(st.available) if st else False,
-                        "unavailable_reason": getattr(st, "unavailable_reason", None),
-                    }
-            except Exception as exc:
-                sandbox_info = {"available": False, "unavailable_reason": str(exc)}
-        return {
-            "status": "ok",
-            "vertex_project_id": cfg.resolved_vertex_project_id or "",
-            "vertex_location": cfg.vertex_location,
-            "default_model": cfg.agent_model.strip() or "",
-            "available_models": AVAILABLE_MODELS,
-            "sandbox_status": sandbox_info,
-        }
+    app.include_router(
+        create_workbench_router(
+            settings=cfg,
+            hooks=build_workbench_hooks(registry, uat_service),
+            approval_broker=approval_broker,
+            conv_store=conv_store,
+            turn_registry=turn_registry,
+        )
+    )
 
     @app.get("/workspaces")
     async def list_workspaces() -> dict[str, Any]:
@@ -204,7 +157,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         async def _gen():
             async for ev in uat_service.stream_job(job_id):
-                yield _sse_format(ev)
+                yield sse_format(ev)
 
         return StreamingResponse(
             _gen(),
@@ -227,74 +180,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             filename=f"{ws_id}_uat_results.csv",
             media_type="text/csv; charset=utf-8",
         )
-
-    @app.get("/conversations")
-    async def list_conversations(workspace_id: str | None = Query(default=None)) -> dict[str, Any]:
-        items = conv_store.list_conversations(workspace_id=workspace_id)
-        return {"conversations": [c.model_dump() for c in items]}
-
-    @app.post("/conversations")
-    async def create_conversation(req: CreateConversationRequest) -> dict[str, Any]:
-        try:
-            registry.get_entry(req.workspace_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        rec = await conv_store.create(workspace_id=req.workspace_id, title=req.title)
-        return {"conversation": rec.model_dump()}
-
-    @app.get("/conversations/{conv_id}")
-    async def get_conversation(conv_id: str) -> dict[str, Any]:
-        try:
-            rec = conv_store.get(conv_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return {"conversation": rec.model_dump()}
-
-    @app.post("/conversations/{conv_id}/chat")
-    async def chat_stream(conv_id: str, req: ChatRequest) -> StreamingResponse:
-        try:
-            entry = registry.get_entry(req.workspace_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-        async def _gen():
-            async for ev in stream_agent_turn(
-                settings=cfg,
-                workspace=entry,
-                conversation_id=conv_id,
-                user_message=req.message,
-                mode=req.mode,
-                model=req.model,
-                approval_broker=approval_broker,
-                uat_service=uat_service,
-                conversation_store=conv_store,
-                turn_registry=turn_registry,
-            ):
-                yield _sse_format(ev)
-
-        return StreamingResponse(
-            _gen(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
-        )
-
-    @app.post("/conversations/{conv_id}/cancel")
-    async def cancel_conversation_turn(conv_id: str) -> dict[str, Any]:
-        cancelled_turn = await turn_registry.cancel(conv_id)
-        cancelled_approvals = approval_broker.cancel_conversation(conv_id)
-        return {
-            "ok": True,
-            "conversation_id": conv_id,
-            "cancelled": bool(cancelled_turn or cancelled_approvals),
-            "cancelled_approvals": cancelled_approvals,
-        }
-
-    @app.post("/approvals/{approval_id}")
-    async def resolve_approval(approval_id: str, req: ApprovalDecisionRequest) -> dict[str, Any]:
-        ok = approval_broker.resolve(approval_id, req.approved)
-        if not ok:
-            raise HTTPException(status_code=404, detail=f"No active pending approval: {approval_id}")
-        return {"ok": True, "approval_id": approval_id, "approved": req.approved}
 
     return app
 

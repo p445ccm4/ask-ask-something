@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "../../../vendor/antigravity-workbench/ui/src/theme.css";
+@source "../../../vendor/antigravity-workbench/ui/src";
 
 :root {
   /* BEA Core Brand Colors (Solar Gradient & Accents) */

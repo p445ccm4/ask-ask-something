@@ -30,7 +30,7 @@ if [[ ! -x "$AGENT_DIR/.venv/bin/pytest" ]] || [[ "${1:-}" == "--force-sync" ]];
   (
     cd "$AGENT_DIR"
     UV_PYTHON_INSTALL_DIR=/tmp/uv-python uv sync --all-extras
-    uv cache clean
+    UV_LOCK_TIMEOUT=3 uv cache clean || true
   )
 fi
 

@@ -1,0 +1,3 @@
+[submodule "app/vendor/antigravity-workbench"]
+	path = app/vendor/antigravity-workbench
+	url = git@github.com:p445ccm4/antigravity-workbench.git
