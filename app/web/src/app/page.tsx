@@ -1,7 +1,11 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { AgentWorkbench, type ToolSummarizer } from "@ag-workbench/index";
+import {
+  AgentWorkbench,
+  useWorkbenchNotifications,
+  type ToolSummarizer,
+} from "@ag-workbench/index";
 import { DeployModal } from "@/components/DeployModal";
 import { GitDiffPanel } from "@/components/GitDiffPanel";
 import { HeaderBar } from "@/components/HeaderBar";
@@ -87,6 +91,11 @@ export default function WorkbenchPage() {
   const userCancelledRef = useRef(false);
 
   const [mobileTab, setMobileTab] = useState<"uat" | "agent">("uat");
+
+  const workbenchNotifications = useWorkbenchNotifications({
+    appId: "ask-ask-something",
+    appName: "AskAsk* Workbench",
+  });
 
   const availableModels =
     health?.available_models && health.available_models.length > 0
@@ -231,7 +240,14 @@ export default function WorkbenchPage() {
       );
       const data = await res.json();
       if (!res.ok) {
-        setUatLogs((prev) => [...prev, `ERROR: ${data.detail || "Failed to start UAT"}`]);
+        const errDetail = data.detail || "Failed to start UAT";
+        setUatLogs((prev) => [...prev, `ERROR: ${errDetail}`]);
+        workbenchNotifications.notify({
+          title: "UAT run failed to start",
+          body: `${workspaces.find((w) => w.id === activeWsId)?.name || activeWsId} · ${errDetail}`,
+          tag: `uat:${activeWsId}`,
+          onClick: () => setMobileTab("uat"),
+        });
         setUatRunning(false);
         return;
       }
@@ -266,6 +282,14 @@ export default function WorkbenchPage() {
                 ...prev,
                 `Finished (${ev.status}, exit=${ev.exit_code}).`,
               ]);
+              const wsLabel =
+                workspaces.find((w) => w.id === activeWsId)?.name || activeWsId;
+              workbenchNotifications.notify({
+                title: ev.exit_code === 0 ? "UAT run passed" : "UAT run finished",
+                body: `${wsLabel} · ${ev.status} (exit=${ev.exit_code})`,
+                tag: `uat:${activeWsId}`,
+                onClick: () => setMobileTab("uat"),
+              });
               await loadOverview(activeWsId);
             }
           } catch {
@@ -346,11 +370,25 @@ export default function WorkbenchPage() {
 
       if (!res.ok || !res.body) {
         const errText = await res.text();
+        const msg = errText || `HTTP ${res.status}`;
         updateLastAssistant((m) => ({
           ...m,
           streaming: false,
-          error: errText || `HTTP ${res.status}`,
+          error: msg,
         }));
+        const wsLabel =
+          workspaces.find((w) => w.id === activeWsId)?.name || activeWsId;
+        workbenchNotifications.notifyAgentEvent(
+          { type: "error", conversation_id: convId, message: msg },
+          {
+            workspaceName: wsLabel,
+            conversationId: convId,
+            onClick: () => {
+              setMobileTab("agent");
+              handleSelectConversation(convId);
+            },
+          }
+        );
         return;
       }
 
@@ -374,6 +412,17 @@ export default function WorkbenchPage() {
           } catch {
             continue;
           }
+
+          const wsLabel =
+            workspaces.find((w) => w.id === activeWsId)?.name || activeWsId;
+          workbenchNotifications.notifyAgentEvent(ev, {
+            workspaceName: wsLabel,
+            conversationId: convId,
+            onClick: () => {
+              setMobileTab("agent");
+              handleSelectConversation(convId);
+            },
+          });
 
           const evType = String(ev.type || "");
           if (evType === "thought") {
@@ -461,11 +510,25 @@ export default function WorkbenchPage() {
           cancelled: true,
         }));
       } else {
+        const msg = err instanceof Error ? err.message : String(err);
         updateLastAssistant((m) => ({
           ...m,
           streaming: false,
-          error: err instanceof Error ? err.message : String(err),
+          error: msg,
         }));
+        const wsLabel =
+          workspaces.find((w) => w.id === activeWsId)?.name || activeWsId;
+        workbenchNotifications.notifyAgentEvent(
+          { type: "error", conversation_id: convId, message: msg },
+          {
+            workspaceName: wsLabel,
+            conversationId: convId,
+            onClick: () => {
+              setMobileTab("agent");
+              handleSelectConversation(convId);
+            },
+          }
+        );
       }
     } finally {
       chatAbortRef.current = null;
@@ -626,6 +689,7 @@ export default function WorkbenchPage() {
             emptyDescription="Inspect code, analyze failing UAT turns, apply sandboxed fixes, and verify regressions."
             quickPrompts={ASK_QUICK_PROMPTS}
             toolSummarizer={askToolSummarizer}
+            notifications={workbenchNotifications.control}
           />
         </div>
       </main>
