@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from ag_workbench.approval_broker import ApprovalBroker
+from ag_workbench.commands import default_user_skills_paths, merge_skills_paths
+from ag_workbench.config import WorkbenchSettings
 from ag_workbench.router import WorkbenchHooks, WorkspaceContext
 from ag_workbench.runner import (
     AVAILABLE_MODELS,
@@ -83,6 +85,11 @@ def build_system_instructions(workspace: WorkspaceEntry | WorkspaceContext, mode
             "You may edit files inside the workspace and run local tests inside the Linux sandbox. "
             "`git push` and destructive commands remain blocked — the human user pushes via the UI Deploy buttons."
         ),
+        "unsandboxed_auto": (
+            "CURRENT EXECUTION MODE: UNSANDBOXED AUTO-FIX. "
+            "You may edit files inside the workspace and run shell commands directly on the host without the Linux sandbox or destructive-command blocks. "
+            "Still let the human user push changes via the UI Deploy buttons."
+        ),
     }[mode]
 
     return (
@@ -91,6 +98,7 @@ def build_system_instructions(workspace: WorkspaceEntry | WorkspaceContext, mode
         "ARCHITECTURE & TOOL BOUNDARIES:\n"
         "- Built-in file tools (`view_file`, `search_directory`, `find_file`, `list_directory`, `edit_file`, `create_file`) "
         "and `run_command` are strictly scoped to the target service workspace.\n"
+        "- Use `attach_output_file(file_path, caption)` to deliver any workspace file, report, or image directly to the user in the chatbox.\n"
         "- To inspect UAT results, read case details, or execute HTTP UAT batch runs (including Cloud Run gcloud auth & LLM-as-a-Judge), "
         "ALWAYS use the host tools `get_uat_summary`, `get_uat_case_detail`, and `run_uat_check` instead of invoking `run_uat_batch.py` inside `run_command`.\n"
         "- Follow the `ask-ask-something` debugging discipline: inspect actual vs expected answer/behavior & retrieved sources -> "
@@ -159,6 +167,7 @@ def build_host_tools(
 def build_workbench_hooks(
     registry: WorkspaceRegistry,
     uat_service: UatService,
+    settings: WorkbenchSettings | None = None,
 ) -> WorkbenchHooks:
     def _resolve_ws(ws_id: str) -> WorkspaceContext:
         entry = registry.get_entry(ws_id)
@@ -168,9 +177,22 @@ def build_workbench_hooks(
         entry = registry.get_entry(ws.id)
         return build_host_tools(entry, uat_service, mode)
 
+    def _resolve_skills(_ws: WorkspaceContext | None) -> list[str]:
+        configured = settings.resolved_skills_paths if settings is not None else []
+        return merge_skills_paths(
+            [SKILLS_ROOT] if SKILLS_ROOT.is_dir() else [],
+            configured,
+            default_user_skills_paths(),
+            existing_only=True,
+        )
+
     def _on_mutated(ws: WorkspaceContext) -> dict[str, Any]:
         git_info = inspect_workspace_git(Path(ws.path))
-        return {"type": "git_diff_updated", "git": git_info.model_dump()}
+        return {
+            "type": "git_diff_updated",
+            "workspace_id": ws.id,
+            "git": git_info.model_dump(),
+        }
 
     return WorkbenchHooks(
         resolve_workspace=_resolve_ws,
@@ -179,6 +201,7 @@ def build_workbench_hooks(
         extra_read_only_tool_names=set(_ASK_READ_ONLY_TOOL_NAMES),
         read_only_blocked_tools=set(_ASK_READ_ONLY_BLOCKED_TOOLS),
         skills_paths=[str(SKILLS_ROOT)] if SKILLS_ROOT.is_dir() else [],
+        resolve_skills_paths=_resolve_skills,
         destructive_reason=_ASK_DESTRUCTIVE_REASON,
         on_turn_mutated=_on_mutated,
     )

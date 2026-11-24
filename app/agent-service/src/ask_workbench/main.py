@@ -8,8 +8,14 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ag_workbench.approval_broker import ApprovalBroker
+from ag_workbench.auth import AuthLoginManager
 from ag_workbench.router import create_workbench_router, sse_format
-from ag_workbench.runner import ActiveTurnRegistry, ConversationStore
+from ag_workbench.runner import (
+    ActiveTurnRegistry,
+    ConversationStore,
+    WorkspaceLockRegistry,
+    prune_old_sdk_sessions,
+)
 
 from .agent_runner import build_workbench_hooks
 from .config import Settings, get_settings
@@ -51,8 +57,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     approval_broker = ApprovalBroker()
     uat_service = UatService()
-    conv_store = ConversationStore(cfg.conversations_file)
+    conv_store = ConversationStore(
+        cfg.conversations_db_file,
+        legacy_json_path=cfg.conversations_file,
+    )
     turn_registry = ActiveTurnRegistry()
+    workspace_locks = WorkspaceLockRegistry()
+    auth_manager = AuthLoginManager()
+
+    prune_old_sdk_sessions(
+        cfg.sessions_dir,
+        max_age_days=cfg.session_retention_days,
+        max_sessions=cfg.max_retained_sessions,
+    )
 
     app.state.settings = cfg
     app.state.registry = registry
@@ -60,14 +77,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.uat_service = uat_service
     app.state.conv_store = conv_store
     app.state.turn_registry = turn_registry
+    app.state.workspace_locks = workspace_locks
+    app.state.auth_manager = auth_manager
 
     app.include_router(
         create_workbench_router(
             settings=cfg,
-            hooks=build_workbench_hooks(registry, uat_service),
+            hooks=build_workbench_hooks(registry, uat_service, settings=cfg),
             approval_broker=approval_broker,
             conv_store=conv_store,
             turn_registry=turn_registry,
+            workspace_locks=workspace_locks,
+            auth_manager=auth_manager,
         )
     )
 

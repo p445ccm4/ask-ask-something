@@ -3,7 +3,8 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   AgentWorkbench,
-  useWorkbenchNotifications,
+  AuthLoginModal,
+  useAgentWorkbench,
   type ToolSummarizer,
 } from "@ag-workbench/index";
 import { DeployModal } from "@/components/DeployModal";
@@ -11,11 +12,6 @@ import { GitDiffPanel } from "@/components/GitDiffPanel";
 import { HeaderBar } from "@/components/HeaderBar";
 import { UatDashboard } from "@/components/UatDashboard";
 import type {
-  ChatMessage,
-  ConversationRecord,
-  ExecutionMode,
-  HealthStatus,
-  ModelOption,
   TargetEnv,
   UatOverview,
   WorkspaceGitInfo,
@@ -54,21 +50,11 @@ const askToolSummarizer: ToolSummarizer = (name, args) => {
   return null;
 };
 
-const DEFAULT_MODEL_OPTIONS: ModelOption[] = [
-  { id: "", label: "Auto (gemini-4-hydrogen)" },
-  { id: "gemini-4-hydrogen", label: "Gemini 4 Hydrogen" },
-  { id: "gemini-4-argon", label: "Gemini 4 Argon" },
-  { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash" },
-  { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
-  { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
-];
-
 export default function WorkbenchPage() {
-  const [health, setHealth] = useState<HealthStatus | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [activeWsId, setActiveWsId] = useState<string>("");
-  const [mode, setMode] = useState<ExecutionMode>("read_only");
-  const [selectedModel, setSelectedModel] = useState<string>("");
+  const activeWsIdRef = useRef<string>("");
+  activeWsIdRef.current = activeWsId;
 
   const [overview, setOverview] = useState<UatOverview | null>(null);
   const [overviewLoading, setOverviewLoading] = useState(false);
@@ -83,27 +69,11 @@ export default function WorkbenchPage() {
   const [uatRunning, setUatRunning] = useState(false);
   const [uatLogs, setUatLogs] = useState<string[]>([]);
 
-  const [conversations, setConversations] = useState<ConversationRecord[]>([]);
-  const [activeConvId, setActiveConvId] = useState<string>("");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [chatStreaming, setChatStreaming] = useState(false);
-  const chatAbortRef = useRef<AbortController | null>(null);
-  const userCancelledRef = useRef(false);
-
   const [mobileTab, setMobileTab] = useState<"uat" | "agent">("uat");
-
-  const workbenchNotifications = useWorkbenchNotifications({
-    appId: "ask-ask-something",
-    appName: "AskAsk* Workbench",
-  });
-
-  const availableModels =
-    health?.available_models && health.available_models.length > 0
-      ? health.available_models
-      : DEFAULT_MODEL_OPTIONS;
 
   const loadWorkspaces = useCallback(async (preferredId?: string) => {
     const res = await fetch("/api/workspaces");
+    if (!res.ok) return;
     const data = await res.json();
     const list: WorkspaceSummary[] = data.workspaces || [];
     setWorkspaces(list);
@@ -142,69 +112,49 @@ export default function WorkbenchPage() {
     }
   }, []);
 
-  const createConversation = useCallback(async (wsId: string, title = "New Investigation") => {
-    const res = await fetch("/api/conversations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workspace_id: wsId, title }),
-    });
-    const data = await res.json();
-    const conv = data.conversation as ConversationRecord;
-    setConversations((prev) => [conv, ...prev]);
-    setActiveConvId(conv.conversation_id);
-    setMessages(conv.messages || []);
-    return conv.conversation_id;
-  }, []);
-
-  const loadConversations = useCallback(
-    async (wsId: string) => {
-      if (!wsId) return;
-      const res = await fetch(
-        `/api/conversations?workspace_id=${encodeURIComponent(wsId)}`
-      );
-      const data = await res.json();
-      const list: ConversationRecord[] = data.conversations || [];
-      setConversations(list);
-      if (list.length > 0) {
-        setActiveConvId(list[0].conversation_id);
-        setMessages(list[0].messages || []);
-      } else {
-        await createConversation(wsId);
-      }
-    },
-    [createConversation]
-  );
-
   useEffect(() => {
-    fetch("/api/health?check_sandbox=true")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d: HealthStatus | null) => {
-        if (!d) return;
-        setHealth(d);
-        if (d.default_model) {
-          setSelectedModel(d.default_model);
-        }
-      })
-      .catch(() => {});
-    loadWorkspaces();
+    void loadWorkspaces();
   }, [loadWorkspaces]);
 
   useEffect(() => {
     if (!activeWsId) return;
-    loadOverview(activeWsId);
-    loadGitDiff(activeWsId);
-    loadConversations(activeWsId);
+    void loadOverview(activeWsId);
+    void loadGitDiff(activeWsId);
     setUatLogs([]);
-  }, [activeWsId, loadOverview, loadGitDiff, loadConversations]);
+  }, [activeWsId, loadOverview, loadGitDiff]);
 
-  const handleSelectConversation = async (convId: string) => {
-    setActiveConvId(convId);
-    const res = await fetch(`/api/conversations/${encodeURIComponent(convId)}`);
-    if (res.ok) {
-      const data = await res.json();
-      setMessages(data.conversation?.messages || []);
-    }
-  };
+  const activeWs = workspaces.find((w) => w.id === activeWsId);
+
+  const wb = useAgentWorkbench({
+    workspaceId: activeWsId,
+    workspaceName: activeWs?.name,
+    apiBase: "/api/workbench",
+    initialMode: "read_only",
+    onEvent: (ev) => {
+      if (ev.type === "git_diff_updated") {
+        const evWsId = typeof ev.workspace_id === "string" ? ev.workspace_id : "";
+        const currentWsId = activeWsIdRef.current;
+        if (ev.git && (!evWsId || evWsId === currentWsId)) {
+          setGitInfo(ev.git as WorkspaceGitInfo);
+        }
+        const targetWsId = currentWsId || evWsId;
+        if (targetWsId) {
+          void loadWorkspaces(targetWsId);
+        }
+      }
+    },
+    onTurnDone: () => {
+      const wsId = activeWsIdRef.current;
+      if (!wsId) return;
+      void loadWorkspaces(wsId);
+      void loadGitDiff(wsId);
+      void loadOverview(wsId);
+    },
+    notifications: {
+      appId: "ask-ask-something",
+      appName: "AskAsk* Workbench",
+    },
+  });
 
   const handleAddWorkspace = async (payload: {
     name: string;
@@ -242,7 +192,7 @@ export default function WorkbenchPage() {
       if (!res.ok) {
         const errDetail = data.detail || "Failed to start UAT";
         setUatLogs((prev) => [...prev, `ERROR: ${errDetail}`]);
-        workbenchNotifications.notify({
+        wb.notify({
           title: "UAT run failed to start",
           body: `${workspaces.find((w) => w.id === activeWsId)?.name || activeWsId} · ${errDetail}`,
           tag: `uat:${activeWsId}`,
@@ -284,7 +234,7 @@ export default function WorkbenchPage() {
               ]);
               const wsLabel =
                 workspaces.find((w) => w.id === activeWsId)?.name || activeWsId;
-              workbenchNotifications.notify({
+              wb.notify({
                 title: ev.exit_code === 0 ? "UAT run passed" : "UAT run finished",
                 body: `${wsLabel} · ${ev.status} (exit=${ev.exit_code})`,
                 tag: `uat:${activeWsId}`,
@@ -302,304 +252,18 @@ export default function WorkbenchPage() {
     }
   };
 
-  const sendChatMessage = async (
-    text: string,
-    overrideMode?: ExecutionMode
-  ) => {
-    if (!activeWsId || chatStreaming) return;
-    const effectiveMode = overrideMode || mode;
-    let convId = activeConvId;
-    if (!convId) {
-      convId = await createConversation(activeWsId);
-    }
-
-    setMobileTab("agent");
-    setChatStreaming(true);
-
-    const activeModelLabel =
-      availableModels.find((m) => m.id === selectedModel)?.label ||
-      selectedModel ||
-      undefined;
-
-    setMessages((prev) => [
-      ...prev,
-      { role: "user", content: text },
-      {
-        role: "assistant",
-        content: "",
-        thought: "",
-        tool_events: [],
-        approvals: [],
-        mode: effectiveMode,
-        model: activeModelLabel,
-        streaming: true,
-      },
-    ]);
-
-    const updateLastAssistant = (updater: (msg: ChatMessage) => ChatMessage) => {
-      setMessages((prev) => {
-        if (prev.length === 0) return prev;
-        const copy = [...prev];
-        const lastIdx = copy.length - 1;
-        if (copy[lastIdx].role === "assistant") {
-          copy[lastIdx] = updater(copy[lastIdx]);
-        }
-        return copy;
-      });
-    };
-
-    const controller = new AbortController();
-    chatAbortRef.current = controller;
-    userCancelledRef.current = false;
-
-    try {
-      const res = await fetch(
-        `/api/conversations/${encodeURIComponent(convId)}/chat`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: controller.signal,
-          body: JSON.stringify({
-            workspace_id: activeWsId,
-            message: text,
-            mode: effectiveMode,
-            model: selectedModel || undefined,
-          }),
-        }
-      );
-
-      if (!res.ok || !res.body) {
-        const errText = await res.text();
-        const msg = errText || `HTTP ${res.status}`;
-        updateLastAssistant((m) => ({
-          ...m,
-          streaming: false,
-          error: msg,
-        }));
-        const wsLabel =
-          workspaces.find((w) => w.id === activeWsId)?.name || activeWsId;
-        workbenchNotifications.notifyAgentEvent(
-          { type: "error", conversation_id: convId, message: msg },
-          {
-            workspaceName: wsLabel,
-            conversationId: convId,
-            onClick: () => {
-              setMobileTab("agent");
-              handleSelectConversation(convId);
-            },
-          }
-        );
-        return;
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const frames = buffer.split("\n\n");
-        buffer = frames.pop() || "";
-
-        for (const frame of frames) {
-          const line = frame.trim();
-          if (!line.startsWith("data:")) continue;
-          let ev: Record<string, unknown>;
-          try {
-            ev = JSON.parse(line.slice(5).trim());
-          } catch {
-            continue;
-          }
-
-          const wsLabel =
-            workspaces.find((w) => w.id === activeWsId)?.name || activeWsId;
-          workbenchNotifications.notifyAgentEvent(ev, {
-            workspaceName: wsLabel,
-            conversationId: convId,
-            onClick: () => {
-              setMobileTab("agent");
-              handleSelectConversation(convId);
-            },
-          });
-
-          const evType = String(ev.type || "");
-          if (evType === "thought") {
-            updateLastAssistant((m) => ({
-              ...m,
-              thought: (m.thought || "") + String(ev.delta || ""),
-            }));
-          } else if (evType === "text") {
-            updateLastAssistant((m) => ({
-              ...m,
-              content: (m.content || "") + String(ev.delta || ""),
-            }));
-          } else if (evType === "tool_call" || evType === "tool_result") {
-            updateLastAssistant((m) => ({
-              ...m,
-              tool_events: [
-                ...(m.tool_events || []),
-                {
-                  type: evType as "tool_call" | "tool_result",
-                  id: ev.id as string | undefined,
-                  name: String(ev.name || ""),
-                  args: ev.args as Record<string, unknown> | undefined,
-                  result: ev.result as string | undefined,
-                  error: ev.error as string | null | undefined,
-                },
-              ],
-            }));
-          } else if (evType === "approval_required") {
-            updateLastAssistant((m) => ({
-              ...m,
-              approvals: [
-                ...(m.approvals || []),
-                {
-                  approval_id: String(ev.approval_id || ""),
-                  conversation_id: String(ev.conversation_id || convId),
-                  tool_name: String(ev.tool_name || ""),
-                  args: (ev.args as Record<string, unknown>) || {},
-                  status: "pending",
-                },
-              ],
-            }));
-          } else if (evType === "approval_resolved") {
-            const aid = String(ev.approval_id || "");
-            const approved = Boolean(ev.approved);
-            updateLastAssistant((m) => ({
-              ...m,
-              approvals: (m.approvals || []).map((a) =>
-                a.approval_id === aid
-                  ? { ...a, status: approved ? "approved" : "denied" }
-                  : a
-              ),
-            }));
-          } else if (evType === "git_diff_updated") {
-            if (ev.git) setGitInfo(ev.git as WorkspaceGitInfo);
-            loadWorkspaces(activeWsId);
-          } else if (evType === "error") {
-            updateLastAssistant((m) => ({
-              ...m,
-              streaming: false,
-              error: String(ev.message || "Agent execution error"),
-            }));
-          } else if (evType === "done") {
-            const wasCancelled = Boolean(ev.cancelled);
-            updateLastAssistant((m) => ({
-              ...m,
-              streaming: false,
-              cancelled: wasCancelled || m.cancelled,
-            }));
-            loadWorkspaces(activeWsId);
-            loadGitDiff(activeWsId);
-            loadOverview(activeWsId);
-          }
-        }
-      }
-
-      updateLastAssistant((m) => ({ ...m, streaming: false }));
-    } catch (err) {
-      const isAbort =
-        userCancelledRef.current ||
-        (err instanceof DOMException && err.name === "AbortError");
-      if (isAbort) {
-        updateLastAssistant((m) => ({
-          ...m,
-          streaming: false,
-          cancelled: true,
-        }));
-      } else {
-        const msg = err instanceof Error ? err.message : String(err);
-        updateLastAssistant((m) => ({
-          ...m,
-          streaming: false,
-          error: msg,
-        }));
-        const wsLabel =
-          workspaces.find((w) => w.id === activeWsId)?.name || activeWsId;
-        workbenchNotifications.notifyAgentEvent(
-          { type: "error", conversation_id: convId, message: msg },
-          {
-            workspaceName: wsLabel,
-            conversationId: convId,
-            onClick: () => {
-              setMobileTab("agent");
-              handleSelectConversation(convId);
-            },
-          }
-        );
-      }
-    } finally {
-      chatAbortRef.current = null;
-      setChatStreaming(false);
-    }
-  };
-
-  const handleStopChat = async () => {
-    if (!chatStreaming) return;
-    userCancelledRef.current = true;
-    chatAbortRef.current?.abort();
-    const convId = activeConvId;
-    setMessages((prev) => {
-      if (prev.length === 0) return prev;
-      const copy = [...prev];
-      const lastIdx = copy.length - 1;
-      if (copy[lastIdx].role === "assistant") {
-        copy[lastIdx] = {
-          ...copy[lastIdx],
-          streaming: false,
-          cancelled: true,
-          approvals: (copy[lastIdx].approvals || []).map((a) =>
-            a.status === "pending" ? { ...a, status: "denied" } : a
-          ),
-        };
-      }
-      return copy;
-    });
-    if (convId) {
-      fetch(`/api/conversations/${encodeURIComponent(convId)}/cancel`, {
-        method: "POST",
-      }).catch(() => {});
-    }
-  };
-
   const handleDiagnoseCase = (prompt: string, shouldFix: boolean) => {
-    let nextMode = mode;
-    if (shouldFix && mode === "read_only") {
+    let nextMode = wb.mode;
+    if (shouldFix && wb.mode === "read_only") {
       nextMode = "ask_before_fix";
-      setMode("ask_before_fix");
-    } else if (!shouldFix && mode !== "read_only") {
+      wb.setMode("ask_before_fix");
+    } else if (!shouldFix && wb.mode !== "read_only") {
       nextMode = "read_only";
-      setMode("read_only");
+      wb.setMode("read_only");
     }
-    sendChatMessage(prompt, nextMode);
+    setMobileTab("agent");
+    void wb.sendMessage(prompt, nextMode);
   };
-
-  const handleDecideApproval = async (approvalId: string, approved: boolean) => {
-    const res = await fetch(
-      `/api/approvals/${encodeURIComponent(approvalId)}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approved }),
-      }
-    );
-    if (res.ok) {
-      setMessages((prev) =>
-        prev.map((m) => ({
-          ...m,
-          approvals: (m.approvals || []).map((a) =>
-            a.approval_id === approvalId
-              ? { ...a, status: approved ? "approved" : "denied" }
-              : a
-          ),
-        }))
-      );
-    }
-  };
-
-  const activeWs = workspaces.find((w) => w.id === activeWsId);
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-bea-canvas text-bea-text-primary">
@@ -609,7 +273,7 @@ export default function WorkbenchPage() {
         onSelectWorkspace={setActiveWsId}
         onAddWorkspace={handleAddWorkspace}
         onOpenGitDiff={() => {
-          if (activeWsId) loadGitDiff(activeWsId);
+          if (activeWsId) void loadGitDiff(activeWsId);
           setGitDrawerOpen(true);
         }}
         onOpenDeploy={(env) => {
@@ -669,27 +333,39 @@ export default function WorkbenchPage() {
           }`}
         >
           <AgentWorkbench
+            workspaceId={activeWsId}
             workspaceName={activeWs?.name || "Workspace"}
-            mode={mode}
-            onChangeMode={setMode}
-            sandboxStatus={health?.sandbox_status}
-            availableModels={availableModels}
-            selectedModel={selectedModel}
-            onSelectModel={setSelectedModel}
-            conversations={conversations}
-            activeConversationId={activeConvId}
-            messages={messages}
-            streaming={chatStreaming}
-            onSelectConversation={handleSelectConversation}
-            onNewConversation={() => createConversation(activeWsId)}
-            onSendMessage={(txt) => sendChatMessage(txt)}
-            onStopStreaming={handleStopChat}
-            onDecideApproval={handleDecideApproval}
+            apiBase="/api/workbench"
+            mode={wb.mode}
+            onChangeMode={wb.setMode}
+            sandboxStatus={wb.health?.sandbox_status}
+            availableModels={wb.availableModels}
+            selectedModel={wb.selectedModel}
+            onSelectModel={wb.setSelectedModel}
+            slashCommands={wb.slashCommands}
+            onSearchFiles={wb.searchWorkspaceFiles}
+            conversations={wb.conversations}
+            totalConversations={wb.totalConversations}
+            hasMoreConversations={wb.hasMoreConversations}
+            activeConversationId={wb.activeConvId}
+            sessionStates={wb.sessionStates}
+            messages={wb.messages}
+            streaming={wb.streaming}
+            onSelectConversation={wb.selectConversation}
+            onNewConversation={() => {
+              if (activeWsId) void wb.createConversation(activeWsId);
+            }}
+            onCloseConversation={wb.closeConversation}
+            onSearchConversations={wb.searchConversations}
+            onRenameConversation={wb.renameConversation}
+            onSendMessage={(txt, files) => wb.sendMessage(txt, undefined, files)}
+            onStopStreaming={wb.stopStreaming}
+            onDecideApproval={wb.decideApproval}
             emptyTitle={`Maintainer ready for ${activeWs?.name || "Workspace"}`}
             emptyDescription="Inspect code, analyze failing UAT turns, apply sandboxed fixes, and verify regressions."
             quickPrompts={ASK_QUICK_PROMPTS}
             toolSummarizer={askToolSummarizer}
-            notifications={workbenchNotifications.control}
+            notifications={wb.notifications}
           />
         </div>
       </main>
@@ -715,9 +391,19 @@ export default function WorkbenchPage() {
         targetEnv={deployTargetEnv}
         onClose={() => setDeployModalOpen(false)}
         onDeployed={() => {
-          loadWorkspaces(activeWsId);
-          loadGitDiff(activeWsId);
+          void loadWorkspaces(activeWsId);
+          void loadGitDiff(activeWsId);
         }}
+      />
+
+      <AuthLoginModal
+        apiBase="/api/workbench"
+        authStatus={wb.authStatus}
+        errorMessage={wb.authErrorMessage}
+        onAuthenticated={() => {
+          void wb.recheckAuthStatus(true);
+        }}
+        onRecheck={() => wb.recheckAuthStatus(true)}
       />
     </div>
   );

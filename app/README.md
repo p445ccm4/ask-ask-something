@@ -5,14 +5,15 @@ Web UI and Antigravity SDK backend living alongside the `ask-ask-something` plug
 ## Architecture
 
 - **`app/vendor/antigravity-workbench/`** (Git submodule: `p445ccm4/antigravity-workbench`):
-  - Provides the reusable `ag-workbench` Python package (`ApprovalBroker`, `ConversationStore`, `ActiveTurnRegistry`, `create_workbench_router`, execution policies) and React UI components (`AgentWorkbench`, `ApprovalCard`, `ExecutionModeToggle`, `MarkdownContent`, `backendClient`).
+  - Provides the reusable `ag-workbench` Python package (`ApprovalBroker`, `AuthLoginManager`, SQLite WAL `ConversationStore`, `ActiveTurnRegistry`, `WorkspaceLockRegistry`, `create_workbench_router`, slash commands & skill discovery, execution policies) and React UI components (`AgentWorkbench`, `AuthLoginModal`, `ApprovalCard`, `ExecutionModeToggle`, `MarkdownContent`, `useAgentWorkbench`, `backendClient`).
 - **`app/agent-service/`** (FastAPI + `google-antigravity`, port `8000`):
   - Mounts `create_workbench_router` from `ag-workbench` with AskAsk*-specific host tools (`get_uat_summary`, `get_uat_case_detail`, `run_uat_check`, `get_git_diff`) that reuse `skills/ask-ask-something/scripts/run_uat_batch.py` and `xlsx_to_uat.py`.
-  - Enforces 3 execution modes (`read_only`, `ask_before_fix` via `ApprovalBroker`, `sandboxed_auto` via `RunCommandConfig(enable_sandbox=True)`) while always blocking `git push` and destructive commands for the AI agent.
+  - Enforces 4 execution modes (`read_only`, `ask_before_fix` via `ApprovalBroker`, `sandboxed_auto` via `RunCommandConfig(enable_sandbox=True)`, `unsandboxed_auto` without Linux sandbox) while keeping human-only deployments via the UI Deploy buttons.
+  - Exposes `/ask-ask-something`, built-in `/plan` / `/review` / `/tests` / `/explain`, workspace/user skills, `@file` / `@folder` autocomplete, attachments, SQLite conversation persistence, and interactive `gcloud` auth recovery.
   - Provides a **human-only** `deploy_service` triggered strictly from the UI's **Deploy to DEV** and **Deploy to UAT** buttons (`git push origin main` scoped to the active service directory, preserving UAT's `src/config.py` during DEV → UAT promotion).
 - **`app/web/`** (Next.js App Router + BFF, port `3000`):
-  - Imports `AgentWorkbench` (including the 3-way execution mode toggle) and BFF proxy helpers from `app/vendor/antigravity-workbench/ui/src/`.
-  - Proxies all JSON and SSE requests through `/api/*` route handlers so a single port (`3000`) serves the entire app in Cloud Shell Web Preview and provides a clean BFF seam for future auth or database persistence.
+  - Uses `useAgentWorkbench`, `AgentWorkbench` (multi-tab sessions, interrupt-and-append, inline rename, searchable session picker, 4-way execution mode toggle, file preview), and `AuthLoginModal` from `app/vendor/antigravity-workbench/ui/src/`.
+  - Proxies workbench endpoints through `/api/workbench/[...path]` (`createWorkbenchCatchAllHandlers()`) alongside AskAsk*-specific `/api/workspaces/*` and `/api/uat/*` routes so a single port (`3000`) serves the entire app in Cloud Shell Web Preview.
 
 ## First-Time Setup on Cloud Shell
 
@@ -25,7 +26,7 @@ If you just cloned this repository, ensure the submodule is initialized (`git su
    ```
    *(Cloud Shell includes `node`, `npm`, `gcloud`, and `sudo` for the `/tmp` bind mounts in `setup_mounts.sh`.)*
 
-2. **Authenticate `gcloud` and Vertex AI ADC** (used by `google-antigravity`, the Vertex AI LLM-as-a-Judge, and `gcloud-id-token` UAT targets):
+2. **Authenticate `gcloud` and Vertex AI ADC** (used by `google-antigravity`, the Vertex AI LLM-as-a-Judge, and `gcloud-id-token` UAT targets; you can also sign in interactively from the Workbench UI modal when credentials expire):
    ```bash
    gcloud auth login
    gcloud auth application-default login
@@ -48,8 +49,10 @@ If you just cloned this repository, ensure the submodule is initialized (`git su
    From the repository root:
    ```bash
    ./app/dev.sh
+   # or production mode (no hot-reload):
+   ./app/prod.sh
    ```
-   `dev.sh` automatically runs `setup_mounts.sh` to bind-mount `.venv`, `node_modules`, `.next`, and caches onto `/tmp` (preserving `/home` disk quota), installs dependencies on first run, starts FastAPI on `127.0.0.1:8000`, and starts Next.js on `0.0.0.0:3000`. In Cloud Shell, open **Web Preview → Preview on port 3000**.
+   `dev.sh` / `prod.sh` automatically runs `setup_mounts.sh` to bind-mount `.venv`, `node_modules`, `.next`, and caches onto `/tmp` (preserving `/home` disk quota), installs dependencies on first run, starts FastAPI on `127.0.0.1:8000`, and starts Next.js on `0.0.0.0:3000`. In Cloud Shell, open **Web Preview → Preview on port 3000**.
 
 5. **Add a target agent repo and run UAT:**
    - If you left `DEFAULT_WORKSPACES_JSON` empty, click the **`+`** button next to the workspace selector in the UI header to register your local agent repository path.

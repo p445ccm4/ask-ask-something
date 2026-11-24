@@ -1,12 +1,20 @@
 export type {
+  AuthStatus,
+  ChatAttachment,
   ChatMessage,
+  ConversationListResponse,
   ConversationRecord,
+  ConversationSummary,
   ExecutionMode,
   ModelOption,
   PendingApprovalItem,
   SandboxStatus,
+  SessionRuntimeState,
+  SlashCommandItem,
   ToolEvent,
   WorkbenchHealthStatus as HealthStatus,
+  WorkbenchNotificationControl,
+  WorkspaceFileItem,
 } from "@ag-workbench/types";
 
 export type TargetEnv = "dev" | "uat";
