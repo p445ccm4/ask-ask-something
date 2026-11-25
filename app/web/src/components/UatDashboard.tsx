@@ -16,6 +16,7 @@ import {
   XCircle,
 } from "lucide-react";
 import type { UatCaseResult, UatOverview } from "@/lib/types";
+import { apiUrl } from "@/lib/basePath";
 import { MarkdownContent } from "@ag-workbench/index";
 
 interface UatDashboardProps {
@@ -158,7 +159,7 @@ export function UatDashboard({
       <div className="space-y-3 border-b border-bea-border bg-bea-card p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-sm font-bold text-neutral-800">UAT Suite Overview</h2>
+            <h2 className="text-sm font-bold text-bea-text-strong">UAT Suite Overview</h2>
             <p className="truncate text-[11px] text-bea-text-secondary">
               {endpoint ? (
                 <>
@@ -181,7 +182,7 @@ export function UatDashboard({
             </button>
             {overview?.has_results && (
               <a
-                href={`/api/workspaces/${encodeURIComponent(workspaceId)}/uat/export-csv`}
+                href={apiUrl(`/api/workspaces/${encodeURIComponent(workspaceId)}/uat/export-csv`)}
                 className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-bea-border bg-bea-card px-2.5 py-1.5 text-xs font-medium text-bea-text-primary shadow-2xs transition hover:bg-bea-canvas"
               >
                 <Download className="h-3.5 w-3.5" />
@@ -267,8 +268,8 @@ export function UatDashboard({
                 onClick={() => setStatusFilter(tab)}
                 className={`cursor-pointer rounded-md px-2.5 py-1 font-semibold transition ${
                   statusFilter === tab
-                    ? "bg-bea-card text-neutral-900 shadow-xs"
-                    : "text-bea-text-secondary hover:text-neutral-800"
+                    ? "bg-bea-card text-bea-text-strong shadow-xs"
+                    : "text-bea-text-secondary hover:text-bea-text-strong"
                 }`}
               >
                 {tab}
@@ -282,7 +283,7 @@ export function UatDashboard({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search UAT ID, question, or judge review..."
-              className="w-full rounded-lg border border-bea-border bg-bea-card py-1.5 pl-8 pr-3 text-xs text-neutral-800 placeholder-bea-text-secondary focus:border-solar-red focus:outline-none"
+              className="w-full rounded-lg border border-bea-border bg-bea-card py-1.5 pl-8 pr-3 text-xs text-bea-text-strong placeholder-bea-text-secondary focus:border-solar-red focus:outline-none"
             />
           </div>
           {runningLogs.length > 0 && (
@@ -317,7 +318,7 @@ export function UatDashboard({
           <div className="rounded-xl border border-dashed border-bea-border bg-bea-card p-6 text-center text-xs text-bea-text-secondary">
             {overview && !overview.has_questions && !overview.has_results ? (
               <div className="space-y-2">
-                <p className="font-semibold text-neutral-800">
+                <p className="font-semibold text-bea-text-strong">
                   No UAT questions or results found in this workspace yet.
                 </p>
                 <p>
@@ -363,7 +364,7 @@ export function UatDashboard({
                           {item.turns.length} turn{item.turns.length === 1 ? "" : "s"}
                         </span>
                       </div>
-                      <p className="mt-1 line-clamp-2 text-xs font-medium text-neutral-800">
+                      <p className="mt-1 line-clamp-2 text-xs font-medium text-bea-text-strong">
                         {firstQuestion}
                       </p>
                       {item.uat_review?.comment && !isOpen && (
@@ -411,7 +412,7 @@ export function UatDashboard({
                               setShowConsole(true);
                               onStartRun({ case_ids: item.id });
                             }}
-                            className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-bea-border bg-bea-card px-2.5 py-1 text-[11px] font-medium text-neutral-800 shadow-2xs hover:bg-bea-canvas disabled:cursor-not-allowed disabled:opacity-40"
+                            className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-bea-border bg-bea-card px-2.5 py-1 text-[11px] font-medium text-bea-text-strong shadow-2xs hover:bg-bea-canvas disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <Play className="h-3 w-3 text-solar-red" />
                             Re-run {item.id}
@@ -423,7 +424,7 @@ export function UatDashboard({
                               setShowConsole(true);
                               onStartRun({ case_ids: item.id, runs: 5 });
                             }}
-                            className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-bea-border bg-bea-card px-2.5 py-1 text-[11px] font-medium text-neutral-800 shadow-2xs hover:bg-bea-canvas disabled:cursor-not-allowed disabled:opacity-40"
+                            className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-bea-border bg-bea-card px-2.5 py-1 text-[11px] font-medium text-bea-text-strong shadow-2xs hover:bg-bea-canvas disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             <FlaskConical className="h-3 w-3 text-bea-teal" />
                             5x Stability
@@ -438,7 +439,7 @@ export function UatDashboard({
                         className="space-y-2 rounded-xl border border-bea-border bg-bea-card p-3 text-xs"
                       >
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-bold text-neutral-800">
+                          <span className="font-bold text-bea-text-strong">
                             Turn {turn.turn}
                           </span>
                           <StatusBadge status={turn.uat_review?.status} />
@@ -448,7 +449,7 @@ export function UatDashboard({
                           <div className="text-[10px] font-semibold uppercase tracking-wide text-bea-text-secondary">
                             Question
                           </div>
-                          <div className="mt-0.5 whitespace-pre-wrap text-neutral-800">
+                          <div className="mt-0.5 whitespace-pre-wrap text-bea-text-strong">
                             {turn.question}
                           </div>
                         </div>
@@ -515,7 +516,7 @@ export function UatDashboard({
                           <div className="space-y-1 rounded-lg border border-bea-border bg-bea-canvas/55 p-2.5 text-[11px] text-bea-text-primary">
                             {turn.uat_review.behavior_check && (
                               <div>
-                                <span className="font-semibold text-neutral-800">
+                                <span className="font-semibold text-bea-text-strong">
                                   Behavior Check:{" "}
                                 </span>
                                 {turn.uat_review.behavior_check}
@@ -523,7 +524,7 @@ export function UatDashboard({
                             )}
                             {turn.uat_review.answer_check && (
                               <div>
-                                <span className="font-semibold text-neutral-800">
+                                <span className="font-semibold text-bea-text-strong">
                                   Answer Check:{" "}
                                 </span>
                                 {turn.uat_review.answer_check}

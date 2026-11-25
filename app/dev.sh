@@ -7,6 +7,22 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_PORT="${AGENT_SERVICE_PORT:-8000}"
 WEB_PORT="${PORT:-3000}"
 
+if [[ -z "${NEXT_PUBLIC_BASE_PATH+x}" ]]; then
+  if [[ "${CLOUD_SHELL:-}" == "true" ]]; then
+    NEXT_PUBLIC_BASE_PATH=""
+  elif [[ -n "${JUPYTER_SERVER_ROOT:-}${JUPYTER_SERVER_URL:-}${JUPYTER_RUNTIME_DIR:-}${JPY_PARENT_PID:-}${DL_ANACONDA_HOME:-}" ]] \
+    || [[ "${HOME:-}" == "/home/jupyter" ]] \
+    || [[ -d "/opt/deeplearning" ]] \
+    || [[ -f "/etc/jupyter/jupyter_server_config.py" ]] \
+    || [[ -f "/etc/jupyter/jupyter_notebook_config.py" ]]; then
+    NEXT_PUBLIC_BASE_PATH="/proxy/absolute/${WEB_PORT}"
+  else
+    NEXT_PUBLIC_BASE_PATH=""
+  fi
+fi
+NEXT_PUBLIC_BASE_PATH="${NEXT_PUBLIC_BASE_PATH%/}"
+export NEXT_PUBLIC_BASE_PATH
+
 cleanup() {
   echo ""
   echo "[AskAsk* Workbench] Shutting down services..."
@@ -26,10 +42,12 @@ echo "[AskAsk* Workbench] Starting FastAPI + Antigravity service on http://127.0
 ) &
 AGENT_PID=$!
 
-echo "[AskAsk* Workbench] Starting Next.js UI + BFF on http://0.0.0.0:${WEB_PORT} ..."
+echo "[AskAsk* Workbench] Starting Next.js UI + BFF on http://0.0.0.0:${WEB_PORT}${NEXT_PUBLIC_BASE_PATH} ..."
 (
   cd "$APP_DIR/web"
-  AGENT_SERVICE_URL="http://127.0.0.1:${AGENT_PORT}" npm run dev -- --hostname 0.0.0.0 --port "$WEB_PORT"
+  AGENT_SERVICE_URL="http://127.0.0.1:${AGENT_PORT}" \
+    NEXT_PUBLIC_BASE_PATH="$NEXT_PUBLIC_BASE_PATH" \
+    npm run dev -- --hostname 0.0.0.0 --port "$WEB_PORT"
 ) &
 WEB_PID=$!
 

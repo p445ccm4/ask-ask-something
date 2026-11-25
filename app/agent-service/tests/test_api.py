@@ -31,6 +31,7 @@ def test_fastapi_endpoints_with_temp_workspace(tmp_path: Path) -> None:
     assert h.status_code == 200
     assert h.json()["status"] == "ok"
     assert len(h.json()["available_models"]) >= 3
+    assert h.json()["web_search"]["available"] is True
 
     add_resp = client.post("/workspaces", json={"name": "Sample", "path": str(repo)})
     assert add_resp.status_code == 200
@@ -71,7 +72,7 @@ def test_fastapi_endpoints_with_temp_workspace(tmp_path: Path) -> None:
     cmds = client.get("/commands", params={"workspace_id": ws_id})
     assert cmds.status_code == 200
     cmd_names = {c["name"] for c in cmds.json()["commands"]}
-    assert {"plan", "review", "tests", "explain", "ask-ask-something"}.issubset(cmd_names)
+    assert {"plan", "review", "tests", "explain", "ask-ask-something", "generative_ui"}.issubset(cmd_names)
 
     files = client.get(f"/workspaces/{ws_id}/files", params={"q": "uat"})
     assert files.status_code == 200
@@ -90,3 +91,11 @@ def test_fastapi_endpoints_with_temp_workspace(tmp_path: Path) -> None:
     assert cancel_idle.status_code == 200
     assert cancel_idle.json()["ok"] is True
     assert cancel_idle.json()["cancelled"] is False
+
+    deleted = client.delete(f"/conversations/{conv_id}")
+    assert deleted.status_code == 200
+    assert deleted.json()["ok"] is True
+    assert deleted.json()["deleted"] is True
+
+    after_del = client.get(f"/conversations/{conv_id}")
+    assert after_del.status_code == 404

@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ag_workbench.approval_broker import ApprovalBroker
+from ag_workbench.attachments import AttachmentStore
 from ag_workbench.auth import AuthLoginManager
 from ag_workbench.router import create_workbench_router, sse_format
 from ag_workbench.runner import (
@@ -63,6 +64,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     turn_registry = ActiveTurnRegistry()
     workspace_locks = WorkspaceLockRegistry()
+    attachment_store = AttachmentStore(
+        cfg.attachments_dir,
+        max_bytes=cfg.max_attachment_bytes,
+    )
     auth_manager = AuthLoginManager()
 
     prune_old_sdk_sessions(
@@ -70,6 +75,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_age_days=cfg.session_retention_days,
         max_sessions=cfg.max_retained_sessions,
     )
+    attachment_store.prune_expired(max_age_days=cfg.attachment_retention_days)
 
     app.state.settings = cfg
     app.state.registry = registry
@@ -78,6 +84,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.conv_store = conv_store
     app.state.turn_registry = turn_registry
     app.state.workspace_locks = workspace_locks
+    app.state.attachment_store = attachment_store
     app.state.auth_manager = auth_manager
 
     app.include_router(
@@ -88,6 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             conv_store=conv_store,
             turn_registry=turn_registry,
             workspace_locks=workspace_locks,
+            attachment_store=attachment_store,
             auth_manager=auth_manager,
         )
     )

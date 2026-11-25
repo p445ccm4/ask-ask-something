@@ -85,7 +85,7 @@ export function HeaderBar({
               value={activeWorkspaceId}
               onChange={(e) => onSelectWorkspace(e.target.value)}
               aria-label="Target repository workspace"
-              className="cursor-pointer rounded-lg border border-bea-border bg-bea-card px-2.5 py-1.5 text-xs font-semibold text-neutral-800 focus:border-solar-red focus:outline-none"
+              className="cursor-pointer rounded-lg border border-bea-border bg-bea-card px-2.5 py-1.5 text-xs font-semibold text-bea-text-strong focus:border-solar-red focus:outline-none"
             >
               {workspaces.map((ws) => (
                 <option key={ws.id} value={ws.id}>
@@ -97,7 +97,7 @@ export function HeaderBar({
               type="button"
               onClick={() => setShowAddRepo(true)}
               title="Add another local agent repo"
-              className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-bea-border bg-bea-card px-2 py-1.5 text-xs text-bea-text-primary shadow-2xs transition hover:bg-bea-canvas hover:text-neutral-900"
+              className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-bea-border bg-bea-card px-2 py-1.5 text-xs text-bea-text-primary shadow-2xs transition hover:bg-bea-canvas hover:text-bea-text-strong"
             >
               <FolderPlus className="h-3.5 w-3.5" />
             </button>
@@ -107,7 +107,7 @@ export function HeaderBar({
             <button
               type="button"
               onClick={onOpenGitDiff}
-              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-bea-border bg-bea-card px-2.5 py-1.5 text-xs text-bea-text-primary shadow-2xs transition hover:bg-bea-canvas hover:text-neutral-900"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-bea-border bg-bea-card px-2.5 py-1.5 text-xs text-bea-text-primary shadow-2xs transition hover:bg-bea-canvas hover:text-bea-text-strong"
             >
               <GitBranch className="h-3.5 w-3.5 text-solar-red" />
               <span className="font-mono font-medium">{activeWs.branch || "no-git"}</span>
@@ -128,7 +128,7 @@ export function HeaderBar({
               type="button"
               disabled={!activeWs}
               onClick={() => onOpenDeploy("dev")}
-              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-bea-teal px-3 py-1.5 text-xs font-semibold text-white shadow-xs transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-bea-teal-solid px-3 py-1.5 text-xs font-semibold text-white shadow-xs transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Rocket className="h-3.5 w-3.5" />
               Deploy to DEV
@@ -157,14 +157,14 @@ export function HeaderBar({
             onSubmit={handleAddSubmit}
             className="w-full max-w-lg space-y-4 rounded-2xl border border-bea-border bg-bea-card p-6 shadow-2xl"
           >
-            <h3 className="text-base font-bold text-neutral-800">Add Agent Repository</h3>
+            <h3 className="text-base font-bold text-bea-text-strong">Add Agent Repository</h3>
             {addError && (
               <div className="rounded-lg border border-solar-red/40 bg-bea-coral/25 p-2.5 text-xs text-bea-burgundy">
                 {addError}
               </div>
             )}
             <div>
-              <label className="mb-1 block text-xs font-semibold text-neutral-700">
+              <label className="mb-1 block text-xs font-semibold text-bea-text-strong">
                 Display Name
               </label>
               <input
@@ -173,11 +173,11 @@ export function HeaderBar({
                 value={repoName}
                 onChange={(e) => setRepoName(e.target.value)}
                 placeholder="e.g. Sample Agent (DEV)"
-                className="w-full rounded-lg border border-bea-border bg-bea-card px-3 py-2 text-sm text-neutral-800 focus:border-solar-red focus:outline-none"
+                className="w-full rounded-lg border border-bea-border bg-bea-card px-3 py-2 text-sm text-bea-text-strong focus:border-solar-red focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-semibold text-neutral-700">
+              <label className="mb-1 block text-xs font-semibold text-bea-text-strong">
                 Local DEV Repository / Service Path
               </label>
               <input
@@ -186,11 +186,11 @@ export function HeaderBar({
                 value={repoPath}
                 onChange={(e) => setRepoPath(e.target.value)}
                 placeholder="/path/to/dev-repo/sample-agent-service"
-                className="w-full rounded-lg border border-bea-border bg-bea-card px-3 py-2 font-mono text-xs text-neutral-800 focus:border-solar-red focus:outline-none"
+                className="w-full rounded-lg border border-bea-border bg-bea-card px-3 py-2 font-mono text-xs text-bea-text-strong focus:border-solar-red focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1 block text-xs font-semibold text-neutral-700">
+              <label className="mb-1 block text-xs font-semibold text-bea-text-strong">
                 Optional Paired UAT Path (for Deploy to UAT promotion)
               </label>
               <input
@@ -198,7 +198,7 @@ export function HeaderBar({
                 value={uatPath}
                 onChange={(e) => setUatPath(e.target.value)}
                 placeholder="/path/to/uat-repo/sample-agent-service"
-                className="w-full rounded-lg border border-bea-border bg-bea-card px-3 py-2 font-mono text-xs text-neutral-800 focus:border-solar-red focus:outline-none"
+                className="w-full rounded-lg border border-bea-border bg-bea-card px-3 py-2 font-mono text-xs text-bea-text-strong focus:border-solar-red focus:outline-none"
               />
             </div>
             <div className="flex justify-end gap-2 pt-2">

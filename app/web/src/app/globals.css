@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "katex/dist/katex.min.css";
 @import "../../../vendor/antigravity-workbench/ui/src/theme.css";
 @source "../../../vendor/antigravity-workbench/ui/src";
 
@@ -13,6 +14,7 @@
 
   /* BEA Secondary & Semantic Colors */
   --bea-deep-teal: #004742;
+  --bea-teal-solid: #004742;
   --bea-emerald-green: #29BA74;
   --bea-hyperlink-blue: #0563C1;
   --bea-warning-amber: #D97706;
@@ -65,6 +67,28 @@
   --solar-gradient: var(--solar-on-white-gradient);
 }
 
+.dark,
+[data-theme="dark"] {
+  --bea-deep-burgundy: #FCA5A5;
+  --bea-deep-teal: #2DD4BF;
+  --bea-teal-solid: #0F5E57;
+  --bea-hyperlink-blue: #60A5FA;
+
+  --bea-text-primary: #D1D5DB;
+  --bea-text-secondary: #9CA3AF;
+  --bea-text-strong: #F3F4F6;
+  --bea-canvas-bg: #111317;
+  --bea-surface-subtle: #161920;
+  --bea-card-bg: #1A1D24;
+  --bea-border-light: #2B303B;
+  --bea-border-strong: #3F4654;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-popover: 0 10px 25px -5px rgba(0, 0, 0, 0.55), 0 4px 10px -4px rgba(0, 0, 0, 0.35);
+
+  color-scheme: dark;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -75,6 +99,7 @@
   --color-bea-coral: var(--bea-soft-coral);
   --color-bea-burgundy: var(--bea-deep-burgundy);
   --color-bea-teal: var(--bea-deep-teal);
+  --color-bea-teal-solid: var(--bea-teal-solid);
   --color-bea-emerald: var(--bea-emerald-green);
   --color-bea-blue: var(--bea-hyperlink-blue);
   --color-bea-text-primary: var(--bea-text-primary);

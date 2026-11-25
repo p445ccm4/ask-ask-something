@@ -6,17 +6,21 @@ import {
   AuthLoginModal,
   useAgentWorkbench,
   type ToolSummarizer,
+  type WorkbenchTheme,
 } from "@ag-workbench/index";
 import { DeployModal } from "@/components/DeployModal";
 import { GitDiffPanel } from "@/components/GitDiffPanel";
 import { HeaderBar } from "@/components/HeaderBar";
 import { UatDashboard } from "@/components/UatDashboard";
+import { apiUrl } from "@/lib/basePath";
 import type {
   TargetEnv,
   UatOverview,
   WorkspaceGitInfo,
   WorkspaceSummary,
 } from "@/lib/types";
+
+const WORKBENCH_API_BASE = apiUrl("/api/workbench");
 
 const ASK_QUICK_PROMPTS = [
   "Summarize the current UAT pass/fail status and main failure patterns.",
@@ -71,8 +75,13 @@ export default function WorkbenchPage() {
 
   const [mobileTab, setMobileTab] = useState<"uat" | "agent">("uat");
 
+  const applyDocumentTheme = useCallback((nextTheme: WorkbenchTheme) => {
+    document.documentElement.classList.toggle("dark", nextTheme === "dark");
+    document.documentElement.style.colorScheme = nextTheme;
+  }, []);
+
   const loadWorkspaces = useCallback(async (preferredId?: string) => {
-    const res = await fetch("/api/workspaces");
+    const res = await fetch(apiUrl("/api/workspaces"));
     if (!res.ok) return;
     const data = await res.json();
     const list: WorkspaceSummary[] = data.workspaces || [];
@@ -90,7 +99,9 @@ export default function WorkbenchPage() {
     if (!wsId) return;
     setOverviewLoading(true);
     try {
-      const res = await fetch(`/api/workspaces/${encodeURIComponent(wsId)}/uat/overview`);
+      const res = await fetch(
+        apiUrl(`/api/workspaces/${encodeURIComponent(wsId)}/uat/overview`)
+      );
       if (res.ok) {
         setOverview(await res.json());
       }
@@ -103,7 +114,9 @@ export default function WorkbenchPage() {
     if (!wsId) return;
     setGitLoading(true);
     try {
-      const res = await fetch(`/api/workspaces/${encodeURIComponent(wsId)}/git-diff`);
+      const res = await fetch(
+        apiUrl(`/api/workspaces/${encodeURIComponent(wsId)}/git-diff`)
+      );
       if (res.ok) {
         setGitInfo(await res.json());
       }
@@ -128,7 +141,7 @@ export default function WorkbenchPage() {
   const wb = useAgentWorkbench({
     workspaceId: activeWsId,
     workspaceName: activeWs?.name,
-    apiBase: "/api/workbench",
+    apiBase: WORKBENCH_API_BASE,
     initialMode: "read_only",
     onEvent: (ev) => {
       if (ev.type === "git_diff_updated") {
@@ -161,7 +174,7 @@ export default function WorkbenchPage() {
     path: string;
     uat_path?: string;
   }) => {
-    const res = await fetch("/api/workspaces", {
+    const res = await fetch(apiUrl("/api/workspaces"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -181,7 +194,7 @@ export default function WorkbenchPage() {
     setUatLogs(["Starting UAT batch runner..."]);
     try {
       const res = await fetch(
-        `/api/workspaces/${encodeURIComponent(activeWsId)}/uat/run`,
+        apiUrl(`/api/workspaces/${encodeURIComponent(activeWsId)}/uat/run`),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -203,7 +216,7 @@ export default function WorkbenchPage() {
       }
 
       const streamRes = await fetch(
-        `/api/uat/jobs/${encodeURIComponent(data.job_id)}/stream`
+        apiUrl(`/api/uat/jobs/${encodeURIComponent(data.job_id)}/stream`)
       );
       if (!streamRes.body) {
         setUatRunning(false);
@@ -335,13 +348,18 @@ export default function WorkbenchPage() {
           <AgentWorkbench
             workspaceId={activeWsId}
             workspaceName={activeWs?.name || "Workspace"}
-            apiBase="/api/workbench"
+            apiBase={WORKBENCH_API_BASE}
             mode={wb.mode}
             onChangeMode={wb.setMode}
             sandboxStatus={wb.health?.sandbox_status}
             availableModels={wb.availableModels}
             selectedModel={wb.selectedModel}
             onSelectModel={wb.setSelectedModel}
+            webSearchEnabled={wb.webSearchEnabled}
+            onChangeWebSearch={wb.setWebSearchEnabled}
+            webSearchHealth={wb.health?.web_search}
+            vertexProjectId={wb.health?.vertex_project_id}
+            vertexLocation={wb.health?.vertex_location}
             slashCommands={wb.slashCommands}
             onSearchFiles={wb.searchWorkspaceFiles}
             conversations={wb.conversations}
@@ -356,16 +374,18 @@ export default function WorkbenchPage() {
               if (activeWsId) void wb.createConversation(activeWsId);
             }}
             onCloseConversation={wb.closeConversation}
+            onDeleteConversation={wb.deleteConversation}
             onSearchConversations={wb.searchConversations}
             onRenameConversation={wb.renameConversation}
             onSendMessage={(txt, files) => wb.sendMessage(txt, undefined, files)}
-            onStopStreaming={wb.stopStreaming}
+            onStopStreaming={() => wb.stopStreaming()}
             onDecideApproval={wb.decideApproval}
             emptyTitle={`Maintainer ready for ${activeWs?.name || "Workspace"}`}
             emptyDescription="Inspect code, analyze failing UAT turns, apply sandboxed fixes, and verify regressions."
             quickPrompts={ASK_QUICK_PROMPTS}
             toolSummarizer={askToolSummarizer}
             notifications={wb.notifications}
+            onChangeTheme={applyDocumentTheme}
           />
         </div>
       </main>
@@ -397,7 +417,7 @@ export default function WorkbenchPage() {
       />
 
       <AuthLoginModal
-        apiBase="/api/workbench"
+        apiBase={WORKBENCH_API_BASE}
         authStatus={wb.authStatus}
         errorMessage={wb.authErrorMessage}
         onAuthenticated={() => {

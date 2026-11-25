@@ -27,6 +27,11 @@
       "lucide-react": ["./node_modules/lucide-react"],
       "react-markdown": ["./node_modules/react-markdown"],
       "remark-gfm": ["./node_modules/remark-gfm"],
+      "remark-math": ["./node_modules/remark-math"],
+      "rehype-katex": ["./node_modules/rehype-katex"],
+      "rehype-highlight": ["./node_modules/rehype-highlight"],
+      "mermaid": ["./node_modules/mermaid"],
+      "mermaid/*": ["./node_modules/mermaid/*"],
       "next/*": ["./node_modules/next/*"]
     }
   },

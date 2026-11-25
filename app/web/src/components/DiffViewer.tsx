@@ -30,7 +30,7 @@ export function DiffViewer({
       {lines.map((line, idx) => {
         let cls = "text-bea-text-primary";
         if (line.startsWith("diff --git") || line.startsWith("index ")) {
-          cls = "bg-bea-canvas text-neutral-800 font-semibold";
+          cls = "bg-bea-canvas text-bea-text-strong font-semibold";
         } else if (line.startsWith("@@")) {
           cls = "bg-bea-blue/10 text-bea-blue font-medium";
         } else if (line.startsWith("+++") || line.startsWith("---")) {

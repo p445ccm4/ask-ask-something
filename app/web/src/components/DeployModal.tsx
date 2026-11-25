@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, Lock, Rocket, ShieldCheck, X } from "lucide-react";
 import type { DeployPreview, DeployResult, TargetEnv } from "@/lib/types";
+import { apiUrl } from "@/lib/basePath";
 import { DiffViewer } from "./DiffViewer";
 
 interface DeployModalProps {
@@ -40,9 +41,11 @@ export function DeployModal({
       setResult(null);
       try {
         const res = await fetch(
-          `/api/workspaces/${encodeURIComponent(
-            workspaceId
-          )}/deploy/preview?target_env=${targetEnv}&include_config_py=${includeConfigPy}`
+          apiUrl(
+            `/api/workspaces/${encodeURIComponent(
+              workspaceId
+            )}/deploy/preview?target_env=${targetEnv}&include_config_py=${includeConfigPy}`
+          )
         );
         const data = await res.json();
         if (!res.ok) {
@@ -86,7 +89,7 @@ export function DeployModal({
     setError(null);
     try {
       const res = await fetch(
-        `/api/workspaces/${encodeURIComponent(workspaceId)}/deploy/execute`,
+        apiUrl(`/api/workspaces/${encodeURIComponent(workspaceId)}/deploy/execute`),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -126,25 +129,25 @@ export function DeployModal({
           <div className="flex items-center gap-3">
             <div
               className={`flex h-9 w-9 items-center justify-center rounded-xl text-white ${
-                targetEnv === "uat" ? "bg-bea-emerald" : "bg-bea-teal"
+                targetEnv === "uat" ? "bg-bea-emerald" : "bg-bea-teal-solid"
               }`}
             >
               <Rocket className="h-5 w-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-neutral-800">
+              <h2 className="text-base font-bold text-bea-text-strong">
                 Deploy {workspaceName} to {envLabel}
               </h2>
               <p className="text-xs text-bea-text-secondary">
                 Commits scoped service files and runs{" "}
-                <code className="font-semibold text-neutral-700">git push origin main</code> to trigger Cloud Build.
+                <code className="font-semibold text-bea-text-strong">git push origin main</code> to trigger Cloud Build.
               </p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1.5 text-bea-text-secondary hover:bg-bea-canvas hover:text-neutral-800"
+            className="rounded-lg p-1.5 text-bea-text-secondary hover:bg-bea-canvas hover:text-bea-text-strong"
           >
             <X className="h-4 w-4" />
           </button>
@@ -191,7 +194,7 @@ export function DeployModal({
                 </div>
                 <div>
                   <span className="text-bea-text-secondary">Scoped Path &amp; Branch: </span>
-                  <div className="mt-0.5 font-mono text-neutral-800">
+                  <div className="mt-0.5 font-mono text-bea-text-strong">
                     {preview.service_subpath}/ ({preview.branch || "unknown"})
                     {preview.mode === "promote_from_dev" && (
                       <span className="ml-2 select-none rounded bg-bea-emerald/15 px-1.5 py-0.5 text-[10px] font-semibold text-bea-teal">
@@ -256,7 +259,7 @@ export function DeployModal({
                         <span className="rounded bg-solar-orange/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-solar-red-orange">
                           {f.status}
                         </span>
-                        <span className="font-mono text-neutral-800">{f.path}</span>
+                        <span className="font-mono text-bea-text-strong">{f.path}</span>
                       </label>
                     ))}
                   </div>
@@ -265,7 +268,7 @@ export function DeployModal({
 
               {preview.unpushed_commits.length > 0 && (
                 <div className="rounded-xl border border-bea-border bg-bea-card p-3 text-xs">
-                  <div className="font-semibold text-neutral-800">
+                  <div className="font-semibold text-bea-text-strong">
                     Unpushed commits that will also be pushed:
                   </div>
                   <ul className="mt-1 space-y-0.5 font-mono text-[11px] text-bea-text-secondary">
@@ -289,7 +292,7 @@ export function DeployModal({
 
               {selectedFiles.length > 0 && (
                 <div>
-                  <label className="mb-1.5 block text-xs font-semibold text-neutral-800">
+                  <label className="mb-1.5 block text-xs font-semibold text-bea-text-strong">
                     Commit Message
                   </label>
                   <input
@@ -297,7 +300,7 @@ export function DeployModal({
                     value={commitMessage}
                     onChange={(e) => setCommitMessage(e.target.value)}
                     placeholder={`fix(${preview.service_subpath}): describe your fix`}
-                    className="w-full rounded-xl border border-bea-border bg-bea-card px-3.5 py-2 text-sm text-neutral-800 placeholder-bea-text-secondary focus:border-solar-red focus:outline-none"
+                    className="w-full rounded-xl border border-bea-border bg-bea-card px-3.5 py-2 text-sm text-bea-text-strong placeholder-bea-text-secondary focus:border-solar-red focus:outline-none"
                   />
                 </div>
               )}
@@ -326,7 +329,7 @@ export function DeployModal({
                 className={`inline-flex cursor-pointer items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-40 ${
                   targetEnv === "uat"
                     ? "bg-bea-emerald hover:opacity-90"
-                    : "bg-bea-teal hover:opacity-90"
+                    : "bg-bea-teal-solid hover:opacity-90"
                 }`}
               >
                 <Rocket className="h-3.5 w-3.5" />

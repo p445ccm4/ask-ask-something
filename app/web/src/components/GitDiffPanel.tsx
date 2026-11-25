@@ -35,12 +35,12 @@ export function GitDiffPanel({
           <div>
             <div className="flex items-center gap-2">
               <GitBranch className="h-4 w-4 text-solar-red" />
-              <h2 className="text-sm font-bold text-neutral-800">
+              <h2 className="text-sm font-bold text-bea-text-strong">
                 Service Git Diff — {workspaceName}
               </h2>
             </div>
             <p className="mt-0.5 text-xs text-bea-text-secondary">
-              Scoped strictly to <code className="text-neutral-800">{gitInfo?.service_subpath || "."}</code> on branch{" "}
+              Scoped strictly to <code className="text-bea-text-strong">{gitInfo?.service_subpath || "."}</code> on branch{" "}
               <code className="font-semibold text-bea-teal">{gitInfo?.branch || "unknown"}</code>
             </p>
           </div>
@@ -57,7 +57,7 @@ export function GitDiffPanel({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-lg p-1.5 text-bea-text-secondary hover:bg-bea-canvas hover:text-neutral-800"
+              className="rounded-lg p-1.5 text-bea-text-secondary hover:bg-bea-canvas hover:text-bea-text-strong"
             >
               <X className="h-4 w-4" />
             </button>
@@ -99,7 +99,7 @@ export function GitDiffPanel({
                     <span className="rounded bg-solar-orange/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-solar-red-orange">
                       {f.status}
                     </span>
-                    <span className="truncate font-mono text-neutral-800">{f.path}</span>
+                    <span className="truncate font-mono text-bea-text-strong">{f.path}</span>
                   </div>
                 ))}
               </div>
@@ -127,7 +127,7 @@ export function GitDiffPanel({
                 onClose();
                 onOpenDeploy("dev");
               }}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-bea-teal px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-bea-teal-solid px-3 py-1.5 text-xs font-semibold text-white transition hover:opacity-90"
             >
               <Rocket className="h-3.5 w-3.5" />
               Deploy to DEV

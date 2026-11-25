@@ -3,4 +3,4 @@ import { createWorkbenchCatchAllHandlers } from "@ag-workbench/server/backendCli
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export const { GET, POST, PATCH } = createWorkbenchCatchAllHandlers();
+export const { GET, POST, PATCH, DELETE } = createWorkbenchCatchAllHandlers();
