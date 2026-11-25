@@ -271,8 +271,13 @@ class WorkspaceRegistry:
             uat_resolved_str = str(uat_p)
 
         entries = self._load()
-        for existing in entries:
+        for idx, existing in enumerate(entries):
             if Path(existing.path).resolve() == resolved:
+                if uat_resolved_str is not None and existing.uat_path != uat_resolved_str:
+                    updated = existing.model_copy(update={"uat_path": uat_resolved_str})
+                    entries[idx] = updated
+                    self._save(entries)
+                    return updated
                 return existing
 
         base_id = _slugify(name or resolved.name)

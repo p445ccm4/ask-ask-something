@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Literal
 from fastapi import FastAPI, HTTPException, Query
@@ -17,6 +18,7 @@ from ag_workbench.runner import (
     WorkspaceLockRegistry,
     prune_old_sdk_sessions,
 )
+from ag_workbench.workspaces import browse_directories
 
 from .agent_runner import build_workbench_hooks
 from .config import Settings, get_settings
@@ -103,6 +105,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/workspaces")
     async def list_workspaces() -> dict[str, Any]:
         return {"workspaces": [w.model_dump() for w in registry.list_summaries()]}
+
+    @app.get("/workspaces/browse")
+    async def browse_workspace_folders(
+        path: str | None = Query(default=None),
+        include_hidden: bool = Query(default=False),
+    ) -> dict[str, Any]:
+        registered = {Path(w.path).resolve() for w in registry.list_entries()}
+        try:
+            return await asyncio.to_thread(
+                browse_directories,
+                path,
+                include_hidden=include_hidden,
+                registered_paths=registered,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/workspaces")
     async def add_workspace(req: AddWorkspaceRequest) -> dict[str, Any]:

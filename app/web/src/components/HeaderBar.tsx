@@ -8,6 +8,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import type { TargetEnv, WorkspaceSummary } from "@/lib/types";
+import { AddRepoModal } from "./AddRepoModal";
 
 interface HeaderBarProps {
   workspaces: WorkspaceSummary[];
@@ -31,34 +32,8 @@ export function HeaderBar({
   onOpenDeploy,
 }: HeaderBarProps) {
   const [showAddRepo, setShowAddRepo] = useState(false);
-  const [repoName, setRepoName] = useState("");
-  const [repoPath, setRepoPath] = useState("");
-  const [uatPath, setUatPath] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
 
   const activeWs = workspaces.find((w) => w.id === activeWorkspaceId) || null;
-
-  const handleAddSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAdding(true);
-    setAddError(null);
-    try {
-      await onAddWorkspace({
-        name: repoName.trim(),
-        path: repoPath.trim(),
-        uat_path: uatPath.trim() || undefined,
-      });
-      setShowAddRepo(false);
-      setRepoName("");
-      setRepoPath("");
-      setUatPath("");
-    } catch (err) {
-      setAddError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setAdding(false);
-    }
-  };
 
   return (
     <>
@@ -97,9 +72,10 @@ export function HeaderBar({
               type="button"
               onClick={() => setShowAddRepo(true)}
               title="Add another local agent repo"
-              className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-bea-border bg-bea-card px-2 py-1.5 text-xs text-bea-text-primary shadow-2xs transition hover:bg-bea-canvas hover:text-bea-text-strong"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-bea-border bg-bea-card px-2.5 py-1.5 text-xs font-semibold text-bea-text-strong shadow-2xs transition hover:border-solar-red hover:bg-bea-canvas"
             >
-              <FolderPlus className="h-3.5 w-3.5" />
+              <FolderPlus className="h-3.5 w-3.5 text-solar-red-orange" />
+              <span className="hidden sm:inline">Add Repo</span>
             </button>
           </div>
 
@@ -151,75 +127,11 @@ export function HeaderBar({
         </div>
       </header>
 
-      {showAddRepo && (
-        <div className="animate-view-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-[2px]">
-          <form
-            onSubmit={handleAddSubmit}
-            className="w-full max-w-lg space-y-4 rounded-2xl border border-bea-border bg-bea-card p-6 shadow-2xl"
-          >
-            <h3 className="text-base font-bold text-bea-text-strong">Add Agent Repository</h3>
-            {addError && (
-              <div className="rounded-lg border border-solar-red/40 bg-bea-coral/25 p-2.5 text-xs text-bea-burgundy">
-                {addError}
-              </div>
-            )}
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-bea-text-strong">
-                Display Name
-              </label>
-              <input
-                type="text"
-                required
-                value={repoName}
-                onChange={(e) => setRepoName(e.target.value)}
-                placeholder="e.g. Sample Agent (DEV)"
-                className="w-full rounded-lg border border-bea-border bg-bea-card px-3 py-2 text-sm text-bea-text-strong focus:border-solar-red focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-bea-text-strong">
-                Local DEV Repository / Service Path
-              </label>
-              <input
-                type="text"
-                required
-                value={repoPath}
-                onChange={(e) => setRepoPath(e.target.value)}
-                placeholder="/path/to/dev-repo/sample-agent-service"
-                className="w-full rounded-lg border border-bea-border bg-bea-card px-3 py-2 font-mono text-xs text-bea-text-strong focus:border-solar-red focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-semibold text-bea-text-strong">
-                Optional Paired UAT Path (for Deploy to UAT promotion)
-              </label>
-              <input
-                type="text"
-                value={uatPath}
-                onChange={(e) => setUatPath(e.target.value)}
-                placeholder="/path/to/uat-repo/sample-agent-service"
-                className="w-full rounded-lg border border-bea-border bg-bea-card px-3 py-2 font-mono text-xs text-bea-text-strong focus:border-solar-red focus:outline-none"
-              />
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowAddRepo(false)}
-                className="rounded-lg border border-bea-border px-3.5 py-2 text-xs font-medium text-bea-text-primary hover:bg-bea-canvas"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={adding}
-                className="white-on-solar rounded-lg px-4 py-2 text-xs font-semibold shadow-sm transition hover:opacity-95 disabled:opacity-50"
-              >
-                {adding ? "Adding..." : "Add Repository"}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
+      <AddRepoModal
+        open={showAddRepo}
+        onClose={() => setShowAddRepo(false)}
+        onAddWorkspace={onAddWorkspace}
+      />
     </>
   );
 }

@@ -23,6 +23,13 @@ def test_workspace_registry_add_and_summarize(tmp_path: Path) -> None:
     assert summaries[0].has_uat_config is True
     assert summaries[0].has_uat_questions is True
     assert summaries[0].has_uat_results is False
+    assert summaries[0].uat_path is None
+
+    uat_repo = tmp_path / "demo-agent-uat"
+    uat_repo.mkdir()
+    updated = reg.add_entry(name="Demo Agent", path=str(repo), uat_path=str(uat_repo))
+    assert updated.id == entry.id
+    assert updated.uat_path == str(uat_repo.resolve())
 
 
 def test_workspace_registry_seeds_from_env_json(tmp_path: Path) -> None:

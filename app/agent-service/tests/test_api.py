@@ -23,6 +23,12 @@ def test_fastapi_endpoints_with_temp_workspace(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
+    (repo / ".git").mkdir()
+    plain_dir = tmp_path / "notes-dir"
+    plain_dir.mkdir()
+    hidden_dir = tmp_path / ".secret-dir"
+    hidden_dir.mkdir()
+
     settings = Settings(data_dir=tmp_path / "data")
     app = create_app(settings)
     client = TestClient(app)
@@ -33,9 +39,34 @@ def test_fastapi_endpoints_with_temp_workspace(tmp_path: Path) -> None:
     assert len(h.json()["available_models"]) >= 3
     assert h.json()["web_search"]["available"] is True
 
+    b1 = client.get("/workspaces/browse", params={"path": str(tmp_path)})
+    assert b1.status_code == 200
+    b1_data = b1.json()
+    assert b1_data["current_path"] == str(tmp_path.resolve())
+    names1 = [f["name"] for f in b1_data["folders"]]
+    assert names1 == ["data", "notes-dir", "sample-agent"]
+    repo_entry = next(f for f in b1_data["folders"] if f["name"] == "sample-agent")
+    assert repo_entry["is_git_repo"] is True
+    assert repo_entry["already_added"] is False
+
+    b_hidden = client.get(
+        "/workspaces/browse",
+        params={"path": str(tmp_path), "include_hidden": "true"},
+    )
+    assert b_hidden.status_code == 200
+    assert any(f["name"] == ".secret-dir" for f in b_hidden.json()["folders"])
+
+    bad_browse = client.get("/workspaces/browse", params={"path": str(tmp_path / "missing")})
+    assert bad_browse.status_code == 400
+
     add_resp = client.post("/workspaces", json={"name": "Sample", "path": str(repo)})
     assert add_resp.status_code == 200
     ws_id = add_resp.json()["workspace"]["id"]
+
+    b2 = client.get("/workspaces/browse", params={"path": str(tmp_path)})
+    assert b2.status_code == 200
+    repo_entry2 = next(f for f in b2.json()["folders"] if f["name"] == "sample-agent")
+    assert repo_entry2["already_added"] is True
 
     ov = client.get(f"/workspaces/{ws_id}/uat/overview")
     assert ov.status_code == 200
