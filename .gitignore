@@ -13,4 +13,5 @@ uat_results*.json
 app/**/.env
 app/**/.env.local
 app/agent-service/.data/
+.worktrees
 
