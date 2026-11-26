@@ -29,27 +29,39 @@ const ASK_QUICK_PROMPTS = [
 ];
 
 const askToolSummarizer: ToolSummarizer = (name, args) => {
+  const repoTag = args?.repo === "uat" ? "UAT" : "";
   if (name === "get_uat_case_detail") {
     const caseId = typeof args?.case_id === "string" ? args.case_id.trim() : "";
+    const prefix = repoTag ? `[${repoTag}] ` : "";
     return {
-      summary: caseId ? `Case ${caseId}` : "",
-      consumedKeys: ["case_id"],
+      summary: caseId ? `${prefix}Case ${caseId}` : prefix.trim(),
+      consumedKeys: ["case_id", "repo"],
     };
   }
   if (name === "run_uat_check") {
     const caseIds = typeof args?.case_ids === "string" ? args.case_ids.trim() : "";
     const runs = typeof args?.runs === "number" ? args.runs : undefined;
     const base = caseIds ? `Cases: ${caseIds}` : "Full UAT suite";
+    const prefixed = repoTag ? `${repoTag}: ${base}` : base;
     return {
-      summary: runs && runs > 1 ? `${base} (${runs}x)` : base,
-      consumedKeys: ["case_ids", "runs"],
+      summary: runs && runs > 1 ? `${prefixed} (${runs}x)` : prefixed,
+      consumedKeys: ["case_ids", "runs", "repo"],
     };
   }
   if (name === "get_uat_summary") {
-    return { summary: "Workspace UAT overview" };
+    return {
+      summary: repoTag ? "UAT repo overview" : "Workspace UAT overview",
+      consumedKeys: ["repo"],
+    };
   }
   if (name === "get_git_diff") {
-    return { summary: "Scoped git diff" };
+    return {
+      summary: repoTag ? "Scoped git diff (UAT)" : "Scoped git diff",
+      consumedKeys: ["repo"],
+    };
+  }
+  if (name === "compare_dev_and_uat") {
+    return { summary: "DEV vs UAT diff" };
   }
   return null;
 };
@@ -60,10 +72,17 @@ export default function WorkbenchPage() {
   const activeWsIdRef = useRef<string>("");
   activeWsIdRef.current = activeWsId;
 
+  const activeWs = workspaces.find((w) => w.id === activeWsId);
+  const activeHasPairedUat = Boolean(activeWs?.uat_exists);
+  const activeHasPairedUatRef = useRef(false);
+  activeHasPairedUatRef.current = activeHasPairedUat;
+
   const [overview, setOverview] = useState<UatOverview | null>(null);
   const [overviewLoading, setOverviewLoading] = useState(false);
 
   const [gitInfo, setGitInfo] = useState<WorkspaceGitInfo | null>(null);
+  const [uatGitInfo, setUatGitInfo] = useState<WorkspaceGitInfo | null>(null);
+  const [gitRepoTab, setGitRepoTab] = useState<TargetEnv>("dev");
   const [gitLoading, setGitLoading] = useState(false);
   const [gitDrawerOpen, setGitDrawerOpen] = useState(false);
 
@@ -110,15 +129,24 @@ export default function WorkbenchPage() {
     }
   }, []);
 
-  const loadGitDiff = useCallback(async (wsId: string) => {
+  const loadGitDiff = useCallback(async (wsId: string, withUat = false) => {
     if (!wsId) return;
     setGitLoading(true);
     try {
-      const res = await fetch(
-        apiUrl(`/api/workspaces/${encodeURIComponent(wsId)}/git-diff`)
+      const devPromise = fetch(
+        apiUrl(`/api/workspaces/${encodeURIComponent(wsId)}/git-diff?repo=dev`)
       );
-      if (res.ok) {
-        setGitInfo(await res.json());
+      const uatPromise = withUat
+        ? fetch(apiUrl(`/api/workspaces/${encodeURIComponent(wsId)}/git-diff?repo=uat`))
+        : Promise.resolve(null);
+      const [devRes, uatRes] = await Promise.all([devPromise, uatPromise]);
+      if (devRes.ok) {
+        setGitInfo(await devRes.json());
+      }
+      if (uatRes && uatRes.ok) {
+        setUatGitInfo(await uatRes.json());
+      } else if (!withUat) {
+        setUatGitInfo(null);
       }
     } finally {
       setGitLoading(false);
@@ -131,12 +159,15 @@ export default function WorkbenchPage() {
 
   useEffect(() => {
     if (!activeWsId) return;
-    void loadOverview(activeWsId);
-    void loadGitDiff(activeWsId);
+    setGitRepoTab("dev");
     setUatLogs([]);
-  }, [activeWsId, loadOverview, loadGitDiff]);
+  }, [activeWsId]);
 
-  const activeWs = workspaces.find((w) => w.id === activeWsId);
+  useEffect(() => {
+    if (!activeWsId) return;
+    void loadOverview(activeWsId);
+    void loadGitDiff(activeWsId, activeHasPairedUat);
+  }, [activeWsId, activeHasPairedUat, loadOverview, loadGitDiff]);
 
   const wb = useAgentWorkbench({
     workspaceId: activeWsId,
@@ -147,8 +178,11 @@ export default function WorkbenchPage() {
       if (ev.type === "git_diff_updated") {
         const evWsId = typeof ev.workspace_id === "string" ? ev.workspace_id : "";
         const currentWsId = activeWsIdRef.current;
-        if (ev.git && (!evWsId || evWsId === currentWsId)) {
-          setGitInfo(ev.git as WorkspaceGitInfo);
+        if (!evWsId || evWsId === currentWsId) {
+          if (ev.git) setGitInfo(ev.git as WorkspaceGitInfo);
+          if ("uat_git" in ev) {
+            setUatGitInfo((ev.uat_git as WorkspaceGitInfo | null) ?? null);
+          }
         }
         const targetWsId = currentWsId || evWsId;
         if (targetWsId) {
@@ -160,7 +194,7 @@ export default function WorkbenchPage() {
       const wsId = activeWsIdRef.current;
       if (!wsId) return;
       void loadWorkspaces(wsId);
-      void loadGitDiff(wsId);
+      void loadGitDiff(wsId, activeHasPairedUatRef.current);
       void loadOverview(wsId);
     },
     notifications: {
@@ -285,8 +319,9 @@ export default function WorkbenchPage() {
         activeWorkspaceId={activeWsId}
         onSelectWorkspace={setActiveWsId}
         onAddWorkspace={handleAddWorkspace}
-        onOpenGitDiff={() => {
-          if (activeWsId) void loadGitDiff(activeWsId);
+        onOpenGitDiff={(repo) => {
+          setGitRepoTab(repo === "uat" ? "uat" : "dev");
+          if (activeWsId) void loadGitDiff(activeWsId, activeHasPairedUat);
           setGitDrawerOpen(true);
         }}
         onOpenDeploy={(env) => {
@@ -395,9 +430,13 @@ export default function WorkbenchPage() {
         onClose={() => setGitDrawerOpen(false)}
         workspaceName={activeWs?.name || ""}
         hasUatTarget={Boolean(activeWs && (activeWs.uat_exists || activeWs.env === "uat"))}
+        hasPairedUat={activeHasPairedUat}
+        activeRepo={gitRepoTab}
+        onChangeRepo={setGitRepoTab}
         gitInfo={gitInfo}
+        uatGitInfo={uatGitInfo}
         loading={gitLoading}
-        onRefresh={() => loadGitDiff(activeWsId)}
+        onRefresh={() => loadGitDiff(activeWsId, activeHasPairedUat)}
         onOpenDeploy={(env) => {
           setDeployTargetEnv(env);
           setDeployModalOpen(true);
@@ -412,7 +451,7 @@ export default function WorkbenchPage() {
         onClose={() => setDeployModalOpen(false)}
         onDeployed={() => {
           void loadWorkspaces(activeWsId);
-          void loadGitDiff(activeWsId);
+          void loadGitDiff(activeWsId, activeHasPairedUat);
         }}
       />
 

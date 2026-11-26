@@ -22,7 +22,7 @@ from ag_workbench.workspaces import browse_directories
 
 from .agent_runner import build_workbench_hooks
 from .config import Settings, get_settings
-from .deploy_service import TargetEnv, execute_deploy, preview_deploy
+from .deploy_service import DeployMode, TargetEnv, execute_deploy, preview_deploy
 from .uat_service import UatRunRequest, UatService
 from .workspaces import WorkspaceRegistry, inspect_workspace_git
 
@@ -39,6 +39,8 @@ class DeployExecuteRequest(BaseModel):
     commit_message: str
     selected_files: list[str] | None = None
     include_config_py: bool = False
+    deploy_mode: DeployMode = "auto"
+    force_overwrite_uat: bool = False
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -138,12 +140,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/workspaces/{ws_id}/git-diff")
-    async def get_workspace_git_diff(ws_id: str) -> dict[str, Any]:
+    async def get_workspace_git_diff(
+        ws_id: str,
+        repo: Literal["dev", "uat"] = Query(default="dev"),
+    ) -> dict[str, Any]:
         try:
             entry = registry.get_entry(ws_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        info = inspect_workspace_git(Path(entry.path))
+        if repo == "uat":
+            raw_uat = (entry.uat_path or "").strip()
+            if not raw_uat:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No paired UAT repository is configured for workspace '{entry.name}'.",
+                )
+            target = Path(raw_uat).expanduser()
+        else:
+            target = Path(entry.path)
+        info = inspect_workspace_git(target)
         return info.model_dump()
 
     @app.get("/workspaces/{ws_id}/deploy/preview")
@@ -151,12 +166,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ws_id: str,
         target_env: Literal["dev", "uat"] = Query(...),
         include_config_py: bool = Query(default=False),
+        deploy_mode: DeployMode = Query(default="auto"),
+        force_overwrite_uat: bool = Query(default=False),
     ) -> dict[str, Any]:
         try:
             entry = registry.get_entry(ws_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        prev = preview_deploy(entry, target_env=target_env, include_config_py=include_config_py)
+        prev = preview_deploy(
+            entry,
+            target_env=target_env,
+            include_config_py=include_config_py,
+            deploy_mode=deploy_mode,
+            force_overwrite_uat=force_overwrite_uat,
+        )
         return prev.model_dump()
 
     @app.post("/workspaces/{ws_id}/deploy/execute")
@@ -172,18 +195,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 commit_message=req.commit_message,
                 selected_files=req.selected_files,
                 include_config_py=req.include_config_py,
+                deploy_mode=req.deploy_mode,
+                force_overwrite_uat=req.force_overwrite_uat,
             )
             return res.model_dump()
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/workspaces/{ws_id}/uat/overview")
-    async def get_uat_overview(ws_id: str) -> dict[str, Any]:
+    async def get_uat_overview(
+        ws_id: str,
+        repo: Literal["dev", "uat"] = Query(default="dev"),
+    ) -> dict[str, Any]:
         try:
             entry = registry.get_entry(ws_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return uat_service.get_overview(entry).model_dump()
+        try:
+            return uat_service.get_overview(entry, repo=repo).model_dump()
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/workspaces/{ws_id}/uat/run")
     async def start_uat_run(ws_id: str, req: UatRunRequest) -> dict[str, Any]:
@@ -194,7 +225,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         try:
             job = await uat_service.start_run_job(entry, req)
             return {"job_id": job.job_id, "command": job.command}
-        except FileNotFoundError as exc:
+        except (ValueError, FileNotFoundError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/uat/jobs/{job_id}/stream")
@@ -215,13 +246,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.get("/workspaces/{ws_id}/uat/export-csv")
-    async def export_uat_csv(ws_id: str) -> FileResponse:
+    async def export_uat_csv(
+        ws_id: str,
+        repo: Literal["dev", "uat"] = Query(default="dev"),
+    ) -> FileResponse:
         try:
             entry = registry.get_entry(ws_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         try:
-            csv_path = await uat_service.export_csv(entry)
+            csv_path = await uat_service.export_csv(entry, repo=repo)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return FileResponse(

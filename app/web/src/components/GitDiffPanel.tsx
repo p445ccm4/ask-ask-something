@@ -10,7 +10,11 @@ interface GitDiffPanelProps {
   onClose: () => void;
   workspaceName: string;
   hasUatTarget: boolean;
+  hasPairedUat: boolean;
+  activeRepo: TargetEnv;
+  onChangeRepo: (repo: TargetEnv) => void;
   gitInfo: WorkspaceGitInfo | null;
+  uatGitInfo: WorkspaceGitInfo | null;
   loading: boolean;
   onRefresh: () => void;
   onOpenDeploy: (env: TargetEnv) => void;
@@ -21,12 +25,21 @@ export function GitDiffPanel({
   onClose,
   workspaceName,
   hasUatTarget,
+  hasPairedUat,
+  activeRepo,
+  onChangeRepo,
   gitInfo,
+  uatGitInfo,
   loading,
   onRefresh,
   onOpenDeploy,
 }: GitDiffPanelProps) {
   if (!open) return null;
+
+  const shownRepo: TargetEnv = hasPairedUat && activeRepo === "uat" ? "uat" : "dev";
+  const shownGit = shownRepo === "uat" ? uatGitInfo : gitInfo;
+  const devDirtyCount = gitInfo?.changed_files.length ?? 0;
+  const uatDirtyCount = uatGitInfo?.changed_files.length ?? 0;
 
   return (
     <div className="animate-view-fade-in fixed inset-0 z-40 flex justify-end bg-black/40 backdrop-blur-[2px]">
@@ -37,11 +50,12 @@ export function GitDiffPanel({
               <GitBranch className="h-4 w-4 text-solar-red" />
               <h2 className="text-sm font-bold text-bea-text-strong">
                 Service Git Diff — {workspaceName}
+                {hasPairedUat ? ` (${shownRepo.toUpperCase()})` : ""}
               </h2>
             </div>
             <p className="mt-0.5 text-xs text-bea-text-secondary">
-              Scoped strictly to <code className="text-bea-text-strong">{gitInfo?.service_subpath || "."}</code> on branch{" "}
-              <code className="font-semibold text-bea-teal">{gitInfo?.branch || "unknown"}</code>
+              Scoped strictly to <code className="text-bea-text-strong">{shownGit?.service_subpath || "."}</code> on branch{" "}
+              <code className="font-semibold text-bea-teal">{shownGit?.branch || "unknown"}</code>
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -49,7 +63,7 @@ export function GitDiffPanel({
               type="button"
               onClick={onRefresh}
               disabled={loading}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-bea-border bg-bea-card px-2.5 py-1.5 text-xs font-medium text-bea-text-primary hover:bg-bea-canvas disabled:opacity-50"
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-bea-border bg-bea-card px-2.5 py-1.5 text-xs font-medium text-bea-text-primary hover:bg-bea-canvas disabled:opacity-50"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
               Refresh
@@ -64,21 +78,48 @@ export function GitDiffPanel({
           </div>
         </div>
 
+        {hasPairedUat && (
+          <div className="flex items-center gap-2 border-b border-bea-border bg-bea-canvas/50 px-5 py-2">
+            <button
+              type="button"
+              onClick={() => onChangeRepo("dev")}
+              className={`cursor-pointer rounded-lg border px-3 py-1 text-xs font-semibold transition ${
+                shownRepo === "dev"
+                  ? "border-bea-teal bg-bea-teal-solid text-white shadow-2xs"
+                  : "border-bea-border bg-bea-card text-bea-text-secondary hover:text-bea-text-strong"
+              }`}
+            >
+              DEV Repo{devDirtyCount > 0 ? ` (${devDirtyCount})` : ""}
+            </button>
+            <button
+              type="button"
+              onClick={() => onChangeRepo("uat")}
+              className={`cursor-pointer rounded-lg border px-3 py-1 text-xs font-semibold transition ${
+                shownRepo === "uat"
+                  ? "border-bea-emerald bg-bea-emerald text-white shadow-2xs"
+                  : "border-bea-border bg-bea-card text-bea-text-secondary hover:text-bea-text-strong"
+              }`}
+            >
+              Paired UAT Repo{uatDirtyCount > 0 ? ` (${uatDirtyCount})` : ""}
+            </button>
+          </div>
+        )}
+
         <div className="flex-1 space-y-4 overflow-y-auto bg-bea-canvas/40 p-5">
-          {gitInfo?.remote_url && (
+          {shownGit?.remote_url && (
             <div className="rounded-xl border border-bea-border bg-bea-card px-3.5 py-2.5 text-xs text-bea-text-primary">
               <span className="text-bea-text-secondary">Origin remote: </span>
-              <code className="font-mono text-bea-blue">{gitInfo.remote_url}</code>
+              <code className="font-mono text-bea-blue">{shownGit.remote_url}</code>
             </div>
           )}
 
-          {gitInfo && gitInfo.unpushed_commits.length > 0 && (
+          {shownGit && shownGit.unpushed_commits.length > 0 && (
             <div className="rounded-xl border border-solar-orange/40 bg-solar-yellow/10 p-3.5">
               <div className="text-xs font-semibold text-bea-burgundy">
-                Unpushed Local Commits ({gitInfo.unpushed_commits.length})
+                Unpushed Local Commits ({shownGit.unpushed_commits.length})
               </div>
               <ul className="mt-1.5 space-y-1 font-mono text-[11px] text-bea-text-primary">
-                {gitInfo.unpushed_commits.map((c, idx) => (
+                {shownGit.unpushed_commits.map((c, idx) => (
                   <li key={idx}>{c}</li>
                 ))}
               </ul>
@@ -87,11 +128,11 @@ export function GitDiffPanel({
 
           <div>
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-bea-text-secondary">
-              Modified Service Files ({gitInfo?.changed_files.length ?? 0})
+              Modified Service Files ({shownGit?.changed_files.length ?? 0})
             </h3>
-            {gitInfo && gitInfo.changed_files.length > 0 ? (
+            {shownGit && shownGit.changed_files.length > 0 ? (
               <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                {gitInfo.changed_files.map((f) => (
+                {shownGit.changed_files.map((f) => (
                   <div
                     key={f.path}
                     className="flex items-center gap-2 rounded-lg border border-bea-border bg-bea-card px-2.5 py-1.5 text-xs"
@@ -104,7 +145,9 @@ export function GitDiffPanel({
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-bea-text-secondary">Working tree clean for this service.</p>
+              <p className="text-xs text-bea-text-secondary">
+                Working tree clean for this {shownRepo.toUpperCase()} service.
+              </p>
             )}
           </div>
 
@@ -112,7 +155,7 @@ export function GitDiffPanel({
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-bea-text-secondary">
               Unified Diff
             </h3>
-            <DiffViewer diff={gitInfo?.diff || ""} maxHeightClass="max-h-[55vh]" />
+            <DiffViewer diff={shownGit?.diff || ""} maxHeightClass="max-h-[55vh]" />
           </div>
         </div>
 

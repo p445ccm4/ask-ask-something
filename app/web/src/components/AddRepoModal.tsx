@@ -287,7 +287,7 @@ export function AddRepoModal({
           <div>
             <div className="mb-1 flex items-center justify-between gap-2">
               <label className="block text-xs font-semibold text-ag-text-primary">
-                Optional Paired UAT Path (for Deploy to UAT promotion)
+                Optional Paired UAT Path (agent-editable &amp; Deploy to UAT)
               </label>
               {activeTarget === "uat" && (
                 <span className="text-[10px] font-semibold text-ag-teal">

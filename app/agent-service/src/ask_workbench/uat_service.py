@@ -7,7 +7,7 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,7 @@ class UatRunRequest(BaseModel):
     limit: int | None = None
     no_eval: bool = False
     concurrency: int | None = None
+    repo: Literal["dev", "uat"] = "dev"
 
 
 class UatSummaryStats(BaseModel):
@@ -38,6 +39,7 @@ class UatSummaryStats(BaseModel):
 class UatOverview(BaseModel):
     workspace_id: str
     workspace_name: str
+    repo: Literal["dev", "uat"] = "dev"
     has_config: bool = False
     has_questions: bool = False
     has_results: bool = False
@@ -116,8 +118,22 @@ class UatService:
     def xlsx_script(self) -> Path:
         return self._scripts_dir / "xlsx_to_uat.py"
 
-    def _uat_paths(self, workspace: WorkspaceEntry) -> dict[str, Path]:
-        ws = Path(workspace.path)
+    def _uat_paths(
+        self,
+        workspace: WorkspaceEntry,
+        repo: Literal["dev", "uat"] = "dev",
+    ) -> dict[str, Path]:
+        if repo == "uat":
+            raw_uat = (workspace.uat_path or "").strip()
+            if not raw_uat:
+                raise ValueError(
+                    f"No paired UAT repository is configured for workspace '{workspace.name}'."
+                )
+            ws = Path(raw_uat).expanduser()
+            if not ws.is_dir():
+                raise FileNotFoundError(f"Paired UAT directory not found: {ws}")
+        else:
+            ws = Path(workspace.path)
         uat_dir = ws / "scripts" / "uat"
         dev_dir = ws / "scripts" / "dev"
 
@@ -158,8 +174,12 @@ class UatService:
             "results": results_path,
         }
 
-    def get_overview(self, workspace: WorkspaceEntry) -> UatOverview:
-        paths = self._uat_paths(workspace)
+    def get_overview(
+        self,
+        workspace: WorkspaceEntry,
+        repo: Literal["dev", "uat"] = "dev",
+    ) -> UatOverview:
+        paths = self._uat_paths(workspace, repo=repo)
         cfg: dict[str, Any] | None = None
         if paths["config"].is_file():
             cfg = json.loads(paths["config"].read_text(encoding="utf-8"))
@@ -194,6 +214,7 @@ class UatService:
         return UatOverview(
             workspace_id=workspace.id,
             workspace_name=workspace.name,
+            repo=repo,
             has_config=paths["config"].is_file(),
             has_questions=paths["questions"].is_file(),
             has_results=paths["results"].is_file(),
@@ -207,19 +228,26 @@ class UatService:
             results_updated_at=updated_at,
         )
 
-    def get_case_detail(self, workspace: WorkspaceEntry, case_id: str) -> dict[str, Any]:
-        overview = self.get_overview(workspace)
+    def get_case_detail(
+        self,
+        workspace: WorkspaceEntry,
+        case_id: str,
+        repo: Literal["dev", "uat"] = "dev",
+    ) -> dict[str, Any]:
+        overview = self.get_overview(workspace, repo=repo)
         target_id = case_id.strip()
         for item in overview.results:
             if str(item.get("id", "")).lower() == target_id.lower():
-                return {"found_in": "uat_results.json", "case": item}
+                return {"found_in": "uat_results.json", "repo": repo, "case": item}
         for q in overview.questions:
             if str(q.get("id", "")).lower() == target_id.lower():
-                return {"found_in": "uat_questions.json", "case": q}
-        raise KeyError(f"UAT case '{case_id}' not found in workspace '{workspace.name}'.")
+                return {"found_in": "uat_questions.json", "repo": repo, "case": q}
+        raise KeyError(
+            f"UAT case '{case_id}' not found in {repo.upper()} repo of workspace '{workspace.name}'."
+        )
 
     def build_run_command(self, workspace: WorkspaceEntry, req: UatRunRequest) -> tuple[list[str], Path]:
-        paths = self._uat_paths(workspace)
+        paths = self._uat_paths(workspace, repo=req.repo)
         if not paths["config"].is_file():
             raise FileNotFoundError(f"Missing uat_config.json at {paths['config']}")
         if not paths["questions"].is_file():
@@ -259,11 +287,12 @@ class UatService:
         return cmd, output_path
 
     async def start_run_job(self, workspace: WorkspaceEntry, req: UatRunRequest) -> UatJob:
+        paths = self._uat_paths(workspace, repo=req.repo)
         cmd, output_path = self.build_run_command(workspace, req)
         job_id = f"uat_{uuid4().hex[:10]}"
         job = UatJob(job_id=job_id, workspace_id=workspace.id, command=cmd)
         self._jobs[job_id] = job
-        asyncio.create_task(self._execute_job(job, Path(workspace.path), output_path))
+        asyncio.create_task(self._execute_job(job, paths["ws"], output_path))
         return job
 
     async def _execute_job(self, job: UatJob, cwd: Path, output_path: Path) -> None:
@@ -329,11 +358,12 @@ class UatService:
             job._subscribers.discard(q)
 
     async def run_and_collect(self, workspace: WorkspaceEntry, req: UatRunRequest) -> dict[str, Any]:
+        paths = self._uat_paths(workspace, repo=req.repo)
         cmd, output_path = self.build_run_command(workspace, req)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
-            cwd=str(workspace.path),
+            cwd=str(paths["ws"]),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
@@ -344,6 +374,7 @@ class UatService:
             results = json.loads(output_path.read_text(encoding="utf-8"))
         summary = compute_summary(results)
         return {
+            "repo": req.repo,
             "exit_code": proc.returncode,
             "output_file": str(output_path),
             "summary": summary.model_dump(),
@@ -351,8 +382,12 @@ class UatService:
             "logs_tail": "\n".join(stdout_text.splitlines()[-60:]),
         }
 
-    async def export_csv(self, workspace: WorkspaceEntry) -> Path:
-        paths = self._uat_paths(workspace)
+    async def export_csv(
+        self,
+        workspace: WorkspaceEntry,
+        repo: Literal["dev", "uat"] = "dev",
+    ) -> Path:
+        paths = self._uat_paths(workspace, repo=repo)
         if not paths["results"].is_file():
             raise FileNotFoundError(f"No uat_results.json found at {paths['results']}")
         csv_out = paths["results_dir"] / "uat_results.csv"
@@ -363,7 +398,7 @@ class UatService:
             str(paths["results"]),
             "-o",
             str(csv_out),
-            cwd=str(workspace.path),
+            cwd=str(paths["ws"]),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )

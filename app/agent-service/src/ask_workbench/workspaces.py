@@ -47,6 +47,9 @@ class WorkspaceSummary(BaseModel):
     branch: str | None = None
     dirty_count: int = 0
     unpushed_count: int = 0
+    uat_branch: str | None = None
+    uat_dirty_count: int = 0
+    uat_unpushed_count: int = 0
 
 
 _TRANSIENT_PREFIXES = (
@@ -328,6 +331,11 @@ class WorkspaceRegistry:
         )
         git_info = inspect_workspace_git(p) if exists else WorkspaceGitInfo()
         uat_exists = bool(entry.uat_path and Path(entry.uat_path).is_dir())
+        uat_git_info = (
+            inspect_workspace_git(Path(entry.uat_path))
+            if uat_exists and entry.uat_path
+            else WorkspaceGitInfo()
+        )
         return WorkspaceSummary(
             id=entry.id,
             name=entry.name,
@@ -342,6 +350,9 @@ class WorkspaceRegistry:
             branch=git_info.branch,
             dirty_count=len(git_info.changed_files),
             unpushed_count=len(git_info.unpushed_commits),
+            uat_branch=uat_git_info.branch,
+            uat_dirty_count=len(uat_git_info.changed_files),
+            uat_unpushed_count=len(uat_git_info.unpushed_commits),
         )
 
     def list_summaries(self) -> list[WorkspaceSummary]:

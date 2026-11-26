@@ -19,7 +19,7 @@ interface HeaderBarProps {
     path: string;
     uat_path?: string;
   }) => Promise<void>;
-  onOpenGitDiff: () => void;
+  onOpenGitDiff: (repo?: TargetEnv) => void;
   onOpenDeploy: (env: TargetEnv) => void;
 }
 
@@ -34,6 +34,8 @@ export function HeaderBar({
   const [showAddRepo, setShowAddRepo] = useState(false);
 
   const activeWs = workspaces.find((w) => w.id === activeWorkspaceId) || null;
+  const uatDirtyCount = activeWs?.uat_dirty_count ?? 0;
+  const uatUnpushedCount = activeWs?.uat_unpushed_count ?? 0;
 
   return (
     <>
@@ -80,20 +82,36 @@ export function HeaderBar({
           </div>
 
           {activeWs && (
-            <button
-              type="button"
-              onClick={onOpenGitDiff}
-              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-bea-border bg-bea-card px-2.5 py-1.5 text-xs text-bea-text-primary shadow-2xs transition hover:bg-bea-canvas hover:text-bea-text-strong"
-            >
-              <GitBranch className="h-3.5 w-3.5 text-solar-red" />
-              <span className="font-mono font-medium">{activeWs.branch || "no-git"}</span>
-              {(activeWs.dirty_count > 0 || activeWs.unpushed_count > 0) && (
-                <span className="font-mono text-[11px] font-bold text-bea-burgundy">
-                  · {activeWs.dirty_count}M
-                  {activeWs.unpushed_count > 0 ? ` ${activeWs.unpushed_count}↑` : ""}
-                </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => onOpenGitDiff("dev")}
+                title="Inspect DEV git diff"
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-bea-border bg-bea-card px-2.5 py-1.5 text-xs text-bea-text-primary shadow-2xs transition hover:bg-bea-canvas hover:text-bea-text-strong"
+              >
+                <GitBranch className="h-3.5 w-3.5 text-solar-red" />
+                <span className="font-mono font-medium">{activeWs.branch || "no-git"}</span>
+                {(activeWs.dirty_count > 0 || activeWs.unpushed_count > 0) && (
+                  <span className="font-mono text-[11px] font-bold text-bea-burgundy">
+                    · {activeWs.dirty_count}M
+                    {activeWs.unpushed_count > 0 ? ` ${activeWs.unpushed_count}↑` : ""}
+                  </span>
+                )}
+              </button>
+              {activeWs.uat_exists && (uatDirtyCount > 0 || uatUnpushedCount > 0) && (
+                <button
+                  type="button"
+                  onClick={() => onOpenGitDiff("uat")}
+                  title={`Inspect paired UAT git diff (${activeWs.uat_branch || "main"})`}
+                  className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-bea-emerald/45 bg-bea-emerald/10 px-2 py-1.5 font-mono text-[11px] font-bold text-bea-teal shadow-2xs transition hover:bg-bea-emerald/20"
+                >
+                  <span>UAT:</span>
+                  <span>
+                    {uatDirtyCount}M{uatUnpushedCount > 0 ? ` ${uatUnpushedCount}↑` : ""}
+                  </span>
+                </button>
               )}
-            </button>
+            </div>
           )}
         </div>
 

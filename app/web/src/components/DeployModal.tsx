@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Lock, Rocket, ShieldCheck, X } from "lucide-react";
-import type { DeployPreview, DeployResult, TargetEnv } from "@/lib/types";
+import type { DeployMode, DeployPreview, DeployResult, TargetEnv } from "@/lib/types";
 import { apiUrl } from "@/lib/basePath";
 import { DiffViewer } from "./DiffViewer";
 
@@ -27,7 +27,10 @@ export function DeployModal({
   const [preview, setPreview] = useState<DeployPreview | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [includeConfigPy, setIncludeConfigPy] = useState(false);
+  const [deployMode, setDeployMode] = useState<DeployMode>("auto");
+  const [forceOverwriteUat, setForceOverwriteUat] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
+  const commitMessageTouchedRef = useRef(false);
   const [executing, setExecuting] = useState(false);
   const [result, setResult] = useState<DeployResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +47,7 @@ export function DeployModal({
           apiUrl(
             `/api/workspaces/${encodeURIComponent(
               workspaceId
-            )}/deploy/preview?target_env=${targetEnv}&include_config_py=${includeConfigPy}`
+            )}/deploy/preview?target_env=${targetEnv}&include_config_py=${includeConfigPy}&deploy_mode=${deployMode}&force_overwrite_uat=${forceOverwriteUat}`
           )
         );
         const data = await res.json();
@@ -55,7 +58,9 @@ export function DeployModal({
         const prev = data as DeployPreview;
         setPreview(prev);
         setSelectedFiles(prev.changed_files.map((f) => f.path));
-        setCommitMessage((curr) => curr || prev.suggested_commit_message);
+        if (!commitMessageTouchedRef.current) {
+          setCommitMessage(prev.suggested_commit_message);
+        }
       } catch (err) {
         if (active) setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -66,12 +71,15 @@ export function DeployModal({
     return () => {
       active = false;
     };
-  }, [open, workspaceId, targetEnv, includeConfigPy]);
+  }, [open, workspaceId, targetEnv, includeConfigPy, deployMode, forceOverwriteUat]);
 
   useEffect(() => {
     if (open) {
       setCommitMessage("");
+      commitMessageTouchedRef.current = false;
       setIncludeConfigPy(false);
+      setDeployMode("auto");
+      setForceOverwriteUat(false);
     }
   }, [open, targetEnv, workspaceId]);
 
@@ -98,6 +106,8 @@ export function DeployModal({
             commit_message: commitMessage,
             selected_files: selectedFiles,
             include_config_py: includeConfigPy,
+            deploy_mode: deployMode,
+            force_overwrite_uat: forceOverwriteUat,
           }),
         }
       );
@@ -154,6 +164,37 @@ export function DeployModal({
         </div>
 
         <div className="flex-1 space-y-4 overflow-y-auto bg-bea-canvas/40 p-6">
+          {targetEnv === "uat" && !result && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-bea-border bg-bea-card px-4 py-2.5 text-xs">
+              <span className="font-semibold text-bea-text-secondary">UAT Deploy Mode:</span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {(
+                  [
+                    ["auto", "Auto"],
+                    ["direct_push", "Push Direct UAT Changes"],
+                    ["promote_from_dev", "Promote DEV → UAT"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => {
+                      setDeployMode(value);
+                      if (value !== "promote_from_dev") setForceOverwriteUat(false);
+                    }}
+                    className={`cursor-pointer rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition ${
+                      deployMode === value
+                        ? "border-bea-emerald bg-bea-emerald text-white shadow-2xs"
+                        : "border-bea-border bg-bea-canvas/60 text-bea-text-secondary hover:text-bea-text-strong"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {loading ? (
             <div className="py-12 text-center text-sm text-bea-text-secondary">
               Inspecting repository changes and computing {envLabel} diff preview...
@@ -196,14 +237,60 @@ export function DeployModal({
                   <span className="text-bea-text-secondary">Scoped Path &amp; Branch: </span>
                   <div className="mt-0.5 font-mono text-bea-text-strong">
                     {preview.service_subpath}/ ({preview.branch || "unknown"})
-                    {preview.mode === "promote_from_dev" && (
+                    {preview.mode === "promote_from_dev" ? (
                       <span className="ml-2 select-none rounded bg-bea-emerald/15 px-1.5 py-0.5 text-[10px] font-semibold text-bea-teal">
                         DEV → UAT Promotion
                       </span>
+                    ) : (
+                      targetEnv === "uat" && (
+                        <span className="ml-2 select-none rounded bg-bea-teal/15 px-1.5 py-0.5 text-[10px] font-semibold text-bea-teal">
+                          Direct UAT Push
+                        </span>
+                      )
                     )}
                   </div>
                 </div>
               </div>
+
+              {preview.mode === "promote_from_dev" &&
+                preview.has_direct_uat_changes &&
+                (preview.direct_uat_files?.length ?? 0) > 0 && (
+                  <div className="space-y-2 rounded-xl border border-solar-orange/45 bg-solar-yellow/15 p-3.5 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="font-semibold text-bea-burgundy">
+                        Direct uncommitted changes exist in UAT ({preview.direct_uat_files?.length}):{" "}
+                        <code className="font-mono text-[11px]">
+                          {preview.direct_uat_files?.join(", ")}
+                        </code>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeployMode("direct_push");
+                          setForceOverwriteUat(false);
+                        }}
+                        className="cursor-pointer rounded-lg border border-bea-emerald bg-bea-emerald px-2.5 py-1 text-[11px] font-semibold text-white transition hover:opacity-90"
+                      >
+                        Switch to Push Direct UAT Changes
+                      </button>
+                    </div>
+                    {(preview.overlap_conflict_files?.length ?? 0) > 0 && (
+                      <label className="flex cursor-pointer items-center gap-2 font-medium text-bea-burgundy">
+                        <input
+                          type="checkbox"
+                          checked={forceOverwriteUat}
+                          onChange={(e) => setForceOverwriteUat(e.target.checked)}
+                          className="rounded border-bea-border accent-solar-red"
+                        />
+                        <span>
+                          Overwrite overlapping direct UAT edits (
+                          <code className="font-mono">{preview.overlap_conflict_files?.join(", ")}</code>
+                          ) with DEV version
+                        </span>
+                      </label>
+                    )}
+                  </div>
+                )}
 
               {preview.protected_files.length > 0 && (
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-bea-teal/30 bg-bea-teal/5 p-3.5 text-xs">
@@ -298,7 +385,10 @@ export function DeployModal({
                   <input
                     type="text"
                     value={commitMessage}
-                    onChange={(e) => setCommitMessage(e.target.value)}
+                    onChange={(e) => {
+                      commitMessageTouchedRef.current = true;
+                      setCommitMessage(e.target.value);
+                    }}
                     placeholder={`fix(${preview.service_subpath}): describe your fix`}
                     className="w-full rounded-xl border border-bea-border bg-bea-card px-3.5 py-2 text-sm text-bea-text-strong placeholder-bea-text-secondary focus:border-solar-red focus:outline-none"
                   />

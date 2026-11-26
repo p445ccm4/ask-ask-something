@@ -18,6 +18,7 @@ export type {
 } from "@ag-workbench/types";
 
 export type TargetEnv = "dev" | "uat";
+export type DeployMode = "auto" | "direct_push" | "promote_from_dev";
 
 export interface WorkspaceSummary {
   id: string;
@@ -33,6 +34,9 @@ export interface WorkspaceSummary {
   branch: string | null;
   dirty_count: number;
   unpushed_count: number;
+  uat_branch?: string | null;
+  uat_dirty_count?: number;
+  uat_unpushed_count?: number;
 }
 
 export interface GitChangedFile {
@@ -74,6 +78,9 @@ export interface DeployPreview {
   can_deploy: boolean;
   blocking_reason: string | null;
   suggested_commit_message: string;
+  has_direct_uat_changes?: boolean;
+  direct_uat_files?: string[];
+  overlap_conflict_files?: string[];
 }
 
 export interface DeployResult {

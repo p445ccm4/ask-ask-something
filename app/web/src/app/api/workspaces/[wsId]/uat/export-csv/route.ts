@@ -5,12 +5,13 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   context: { params: Promise<{ wsId: string }> }
 ) {
   const { wsId } = await context.params;
+  const qs = req.nextUrl.searchParams.toString();
   const upstream = await fetch(
-    `${AGENT_SERVICE_URL}/workspaces/${encodeURIComponent(wsId)}/uat/export-csv`,
+    `${AGENT_SERVICE_URL}/workspaces/${encodeURIComponent(wsId)}/uat/export-csv${qs ? `?${qs}` : ""}`,
     { cache: "no-store" }
   );
   if (!upstream.ok) {
