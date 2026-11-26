@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Literal
 from pydantic import BaseModel, Field
 
-from .workspaces import WorkspaceEntry, inspect_workspace_git, is_transient_service_relpath
+from .workspaces import (
+    WorkspaceEntry,
+    inspect_workspace_git,
+    is_transient_service_relpath,
+    normalize_service_relpath,
+)
 
 TargetEnv = Literal["dev", "uat"]
 
@@ -95,7 +100,7 @@ def _safe_service_relpath(root: Path, rel_path: str) -> Path:
 
 
 def _should_skip_promotion(rel_path: str) -> bool:
-    norm = rel_path.strip().lstrip("./")
+    norm = normalize_service_relpath(rel_path)
     if norm in _PROMOTION_SKIP_EXACT:
         return True
     if is_transient_service_relpath(norm):

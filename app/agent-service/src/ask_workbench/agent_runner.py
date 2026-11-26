@@ -6,6 +6,7 @@ from typing import Any
 
 import ag_workbench
 from ag_workbench.approval_broker import ApprovalBroker
+from ag_workbench.artifacts import AG_ARTIFACTS_DIR_NAME
 from ag_workbench.commands import default_user_skills_paths, merge_skills_paths
 from ag_workbench.config import WorkbenchSettings
 from ag_workbench.router import WorkbenchHooks, WorkspaceContext
@@ -102,7 +103,7 @@ def build_system_instructions(workspace: WorkspaceEntry | WorkspaceContext, mode
         "- Built-in file tools (`view_file`, `search_directory`, `find_file`, `list_directory`, `edit_file`, `create_file`) "
         "and `run_command` are strictly scoped to the target service workspace.\n"
         "- Use `attach_output_file(file_path, caption)` to deliver any workspace file, report, or image directly to the user in the chatbox.\n"
-        "- For interactive HTML widgets/mockups, follow the `generative_ui` skill (embed compact `.html` files via `<agent-embed src=\"path/to/widget.html\"></agent-embed>` or link larger dashboards with standard markdown links).\n"
+        f"- For interactive HTML widgets/mockups, follow the `generative_ui` skill (save self-contained `.html` files under `{AG_ARTIFACTS_DIR_NAME}/` and embed compact widgets via `<agent-embed src=\"{AG_ARTIFACTS_DIR_NAME}/widget.html\"></agent-embed>` or link larger dashboards with standard markdown links).\n"
         "- When `search_web` is enabled, use it to look up up-to-date external documentation, releases, or references when needed.\n"
         "- To inspect UAT results, read case details, or execute HTTP UAT batch runs (including Cloud Run gcloud auth & LLM-as-a-Judge), "
         "ALWAYS use the host tools `get_uat_summary`, `get_uat_case_detail`, and `run_uat_check` instead of invoking `run_uat_batch.py` inside `run_command`.\n"

@@ -50,12 +50,16 @@ def test_deploy_to_dev_scopes_strictly_to_service_and_pushes(tmp_path: Path) -> 
     dev_repo, dev_bare = _init_monorepo(tmp_path, "dev_monorepo", "demo-project-dev")
     uat_repo, _ = _init_monorepo(tmp_path, "uat_monorepo", "demo-project-uat")
 
-    # Modify sample-agent-service AND sibling other-service AND transient results
+    # Modify sample-agent-service AND sibling other-service AND transient results / ephemeral artifacts
     (dev_repo / "sample-agent-service" / "src" / "prompt.py").write_text(
         'SYSTEM_PROMPT = "v2 fixed"\n', encoding="utf-8"
     )
     (dev_repo / "sample-agent-service" / "scripts" / "uat" / "results" / "uat_results.json").write_text(
         '[{"id": "Q1"}]', encoding="utf-8"
+    )
+    (dev_repo / "sample-agent-service" / ".ag-artifacts").mkdir(parents=True)
+    (dev_repo / "sample-agent-service" / ".ag-artifacts" / "widget.html").write_text(
+        "<div>ephemeral</div>", encoding="utf-8"
     )
     (dev_repo / "other-service" / "main.py").write_text("print('dirty sibling')\n", encoding="utf-8")
 
@@ -72,6 +76,7 @@ def test_deploy_to_dev_scopes_strictly_to_service_and_pushes(tmp_path: Path) -> 
     assert prev.mode == "direct_push"
     assert [f.path for f in prev.changed_files] == ["src/prompt.py"]
     assert "other-service" not in prev.diff
+    assert ".ag-artifacts" not in prev.diff
 
     res = execute_deploy(ws, "dev", "fix(sample-agent-service): update prompt v2")
     assert res.ok is True
@@ -87,6 +92,7 @@ def test_deploy_to_dev_scopes_strictly_to_service_and_pushes(tmp_path: Path) -> 
     assert "sample-agent-service/src/prompt.py" in pushed_files
     assert "other-service/main.py" not in pushed_files
     assert "uat_results.json" not in pushed_files
+    assert ".ag-artifacts" not in pushed_files
 
 
 def test_deploy_to_uat_promotes_code_while_protecting_config_py(tmp_path: Path) -> None:

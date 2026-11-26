@@ -5,6 +5,7 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Any
+from ag_workbench.artifacts import AG_ARTIFACTS_DIR_NAME
 from pydantic import BaseModel, Field
 
 
@@ -49,6 +50,7 @@ class WorkspaceSummary(BaseModel):
 
 
 _TRANSIENT_PREFIXES = (
+    f"{AG_ARTIFACTS_DIR_NAME}/",
     "scripts/uat/results/",
     "scripts/dev/uat_results",
     "scripts/dev/__pycache__/",
@@ -75,8 +77,17 @@ def _run_git(cwd: Path, args: list[str], timeout: float = 10.0) -> subprocess.Co
     )
 
 
+def normalize_service_relpath(rel_path: str) -> str:
+    norm = rel_path.strip().replace("\\", "/")
+    while norm.startswith("./"):
+        norm = norm[2:]
+    return norm.lstrip("/")
+
+
 def is_transient_service_relpath(rel_path: str) -> bool:
-    norm = rel_path.strip().lstrip("./")
+    norm = normalize_service_relpath(rel_path)
+    if norm == AG_ARTIFACTS_DIR_NAME:
+        return True
     if any(norm.startswith(p) or f"/{p}" in norm for p in _TRANSIENT_PREFIXES):
         return True
     if norm.endswith((".pyc", ".pyo", ".DS_Store")):

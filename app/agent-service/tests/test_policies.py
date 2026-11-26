@@ -82,6 +82,7 @@ def test_build_system_instructions_supports_all_four_modes() -> None:
         text = build_system_instructions(ws, mode)  # type: ignore[arg-type]
         assert "Sample Agent" in text
         assert "attach_output_file" in text
+        assert ".ag-artifacts/" in text
 
 
 async def test_read_only_mode_blocks_writes_and_run_command() -> None:

@@ -118,6 +118,30 @@ def test_fastapi_endpoints_with_temp_workspace(tmp_path: Path) -> None:
     missing_appr = client.post("/approvals/nonexistent", json={"approved": True})
     assert missing_appr.status_code == 404
 
+    from ag_workbench.store import ArtifactRecord
+
+    art_id = "a" * 32
+    app.state.conv_store.save_artifact(
+        ArtifactRecord(
+            artifact_id=art_id,
+            conversation_id=conv_id,
+            filename="widget.html",
+            source_path=".ag-artifacts/widget.html",
+            content="<div>ok</div>",
+            size_bytes=13,
+        )
+    )
+    art_json = client.get(f"/artifacts/{art_id}", params={"format": "json"})
+    assert art_json.status_code == 200
+    assert art_json.json()["content"] == "<div>ok</div>"
+
+    art_raw = client.get(f"/artifacts/{art_id}")
+    assert art_raw.status_code == 200
+    assert art_raw.headers.get("content-security-policy") == "sandbox"
+    assert art_raw.text == "<div>ok</div>"
+
+    assert client.get(f"/artifacts/{'b' * 32}").status_code == 404
+
     cancel_idle = client.post(f"/conversations/{conv_id}/cancel")
     assert cancel_idle.status_code == 200
     assert cancel_idle.json()["ok"] is True
@@ -130,3 +154,4 @@ def test_fastapi_endpoints_with_temp_workspace(tmp_path: Path) -> None:
 
     after_del = client.get(f"/conversations/{conv_id}")
     assert after_del.status_code == 404
+    assert client.get(f"/artifacts/{art_id}").status_code == 404
