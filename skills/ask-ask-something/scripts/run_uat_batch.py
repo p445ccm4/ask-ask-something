@@ -17,6 +17,7 @@ import json
 import os
 import random
 import socket
+import sqlite3
 import subprocess
 import sys
 import time
@@ -787,16 +788,118 @@ Return a JSON object with keys: `status` ("PASS", "PARTIAL", or "FAIL"), `score`
     }
 
 
+def _open_eval_db(db_path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute("PRAGMA busy_timeout=5000;")
+    return conn
+
+
+def _load_db_suite_inputs(
+    db_path: Path, suite_id: str
+) -> tuple[list[dict[str, Any]], dict[str, dict[int, dict[str, Any]]]]:
+    """Load eval cases and prior latest turn results from SQLite DB."""
+    conn = _open_eval_db(db_path)
+    try:
+        case_rows = conn.execute(
+            """
+            SELECT case_id, turns_json
+            FROM eval_cases
+            WHERE suite_id = ?
+            ORDER BY sort_order ASC, case_id ASC
+            """,
+            (suite_id,),
+        ).fetchall()
+        questions: list[dict[str, Any]] = []
+        for row in case_rows:
+            turns = json.loads(row["turns_json"] or "[]")
+            questions.append({"id": row["case_id"], "turns": turns})
+
+        cached: dict[str, dict[int, dict[str, Any]]] = {}
+        res_rows = conn.execute(
+            "SELECT case_id, result_json FROM eval_latest_results WHERE suite_id = ?",
+            (suite_id,),
+        ).fetchall()
+        for row in res_rows:
+            try:
+                rec = json.loads(row["result_json"] or "{}")
+            except json.JSONDecodeError:
+                continue
+            t_map = {
+                int(tr["turn"]): tr
+                for tr in (rec.get("turns") or [])
+                if isinstance(tr, dict) and isinstance(tr.get("turn"), int)
+            }
+            if t_map:
+                cached[str(row["case_id"])] = t_map
+        return questions, cached
+    finally:
+        conn.close()
+
+
+def _write_case_result_db(
+    db_path: Path,
+    suite_id: str,
+    job_id: str | None,
+    record: dict[str, Any],
+) -> None:
+    """Incrementally persist a single finished case result into SQLite in O(1)."""
+    now = time.time()
+    cid = str(record.get("id") or "")
+    rev = record.get("uat_review") or {}
+    status = str(rev.get("status") or "PENDING_REVIEW").upper()
+    score = float(rev.get("score") or 0.0)
+    comment = str(rev.get("comment") or "")
+    res_json = json.dumps(record, ensure_ascii=False)
+
+    conn = _open_eval_db(db_path)
+    try:
+        if job_id:
+            conn.execute(
+                """
+                INSERT INTO eval_run_results(job_id, suite_id, case_id, status, score, comment, result_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(job_id, case_id) DO UPDATE SET
+                    status = excluded.status,
+                    score = excluded.score,
+                    comment = excluded.comment,
+                    result_json = excluded.result_json,
+                    updated_at = excluded.updated_at
+                """,
+                (job_id, suite_id, cid, status, score, comment, res_json, now),
+            )
+        conn.execute(
+            """
+            INSERT INTO eval_latest_results(suite_id, case_id, job_id, status, score, comment, result_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(suite_id, case_id) DO UPDATE SET
+                job_id = COALESCE(excluded.job_id, eval_latest_results.job_id),
+                status = excluded.status,
+                score = excluded.score,
+                comment = excluded.comment,
+                result_json = excluded.result_json,
+                updated_at = excluded.updated_at
+            """,
+            (suite_id, cid, job_id, status, score, comment, res_json, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _load_cached_turns(
     target_turn: int | None,
     from_results: Path | None,
-    default_output: Path,
+    default_output: Path | None,
 ) -> dict[str, dict[int, dict[str, Any]]]:
     """Load prior turns from an existing results JSON when --turn replay is active."""
     cached: dict[str, dict[int, dict[str, Any]]] = {}
     if target_turn is None or target_turn <= 1:
         return cached
-    cache_path = from_results or (default_output if default_output.is_file() else None)
+    cache_path = from_results or (default_output if (default_output and default_output.is_file()) else None)
     if not cache_path or not cache_path.is_file():
         return cached
     try:
@@ -817,8 +920,8 @@ def _load_cached_turns(
 
 
 async def run_batch(
-    input_path: Path,
-    output_path: Path,
+    input_path: Path | None,
+    output_path: Path | None,
     config: dict[str, Any],
     explicit_token: str | None = None,
     filter_id: str | None = None,
@@ -828,14 +931,22 @@ async def run_batch(
     target_turn: int | None = None,
     from_results: Path | None = None,
     adapter: Any = None,
+    *,
+    db_path: Path | None = None,
+    suite_id: str | None = None,
+    job_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Run all filtered UAT conversations concurrently and write results JSON."""
-    if not input_path.is_file():
-        raise FileNotFoundError(f"Input file not found: {input_path}")
-
-    questions_data = json.loads(input_path.read_text(encoding="utf-8"))
-    if not isinstance(questions_data, list):
-        raise ValueError("Input JSON must be a list of question objects.")
+    """Run all filtered eval conversations concurrently and write results to SQLite DB or JSON."""
+    if db_path and suite_id:
+        questions_data, db_cached = _load_db_suite_inputs(db_path, suite_id)
+        cached_turns_by_id = db_cached if (target_turn is not None and target_turn > 1) else {}
+    else:
+        if not input_path or not input_path.is_file():
+            raise FileNotFoundError(f"Input file not found: {input_path}")
+        questions_data = json.loads(input_path.read_text(encoding="utf-8"))
+        if not isinstance(questions_data, list):
+            raise ValueError("Input JSON must be a list of question objects.")
+        cached_turns_by_id = _load_cached_turns(target_turn, from_results, output_path)
 
     if filter_id:
         allowed_ids = {s.strip() for s in str(filter_id).split(",") if s.strip()}
@@ -843,8 +954,6 @@ async def run_batch(
 
     if limit is not None and limit > 0:
         questions_data = questions_data[:limit]
-
-    cached_turns_by_id = _load_cached_turns(target_turn, from_results, output_path)
 
     # Validate auth and judge client upfront before launching concurrent workers
     _build_auth_headers(config.get("auth") or {}, explicit_token=explicit_token)
@@ -860,10 +969,13 @@ async def run_batch(
     total = len(questions_data)
 
     print("=" * 80)
-    print(f"{agent_name} - Concurrent UAT Batch Runner")
+    print(f"{agent_name} - Concurrent Eval Batch Runner")
     print(f"Endpoint URL: {endpoint_url}")
-    print(f"Input File  : {input_path} ({total} conversations)")
-    print(f"Output File : {output_path}")
+    if db_path and suite_id:
+        print(f"SQLite Suite: {suite_id} ({total} cases) in {db_path}")
+    else:
+        print(f"Input File  : {input_path} ({total} conversations)")
+        print(f"Output File : {output_path}")
     print(f"Concurrency : {concurrency} parallel worker(s)")
     print(
         f"LLM Eval    : {f'ENABLED (judge={judge_model})' if evaluate else 'DISABLED (--no-eval)'}"
@@ -955,14 +1067,17 @@ async def run_batch(
 
                 async with write_lock:
                     results_by_index[idx] = record
-                    ordered_partial = [
-                        results_by_index[k] for k in sorted(results_by_index.keys())
-                    ]
-                    output_path.parent.mkdir(parents=True, exist_ok=True)
-                    output_path.write_text(
-                        json.dumps(ordered_partial, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
+                    if db_path and suite_id:
+                        _write_case_result_db(db_path, suite_id, job_id, record)
+                    elif output_path:
+                        ordered_partial = [
+                            results_by_index[k] for k in sorted(results_by_index.keys())
+                        ]
+                        output_path.parent.mkdir(parents=True, exist_ok=True)
+                        output_path.write_text(
+                            json.dumps(ordered_partial, ensure_ascii=False, indent=2),
+                            encoding="utf-8",
+                        )
 
                 print(
                     f"[{idx}/{total}] Finished {q_id} ({len(turn_records)} turn(s)) in {elapsed}s | "
@@ -994,10 +1109,11 @@ async def run_batch(
     batch_elapsed = round(time.perf_counter() - batch_t0, 2)
     ordered_results = [results_by_index[k] for k in sorted(results_by_index.keys())]
 
+    dest_label = f"SQLite suite '{suite_id}'" if (db_path and suite_id) else str(output_path)
     print("\n" + "=" * 80)
     print(
-        f"Completed {len(ordered_results)}/{total} questions in {batch_elapsed}s "
-        f"(concurrency={concurrency}). Saved to: {output_path}"
+        f"Completed {len(ordered_results)}/{total} cases in {batch_elapsed}s "
+        f"(concurrency={concurrency}). Saved to: {dest_label}"
     )
     if evaluate and ordered_results:
         pass_cnt = sum(1 for r in ordered_results if (r.get("uat_review") or {}).get("status") == "PASS")
@@ -1014,7 +1130,7 @@ async def run_batch(
 
 
 def _load_config(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
-    """Merge optional JSON config file with CLI flag overrides and load domain rubric text."""
+    """Merge SQLite suite config or optional JSON config file with CLI overrides and domain rubric."""
     cfg: dict[str, Any] = {
         "agent_name": "AI Agent",
         "endpoint": "",
@@ -1026,7 +1142,30 @@ def _load_config(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
         "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
     }
     config_dir = Path.cwd()
-    if args.config:
+    domain_rubric = ""
+
+    if args.db and args.suite_id:
+        conn = _open_eval_db(args.db)
+        try:
+            row = conn.execute(
+                "SELECT config_json, rubric_md, name FROM eval_suites WHERE id = ?",
+                (args.suite_id,),
+            ).fetchone()
+            if not row:
+                raise KeyError(f"Eval suite '{args.suite_id}' not found in {args.db}")
+            user_cfg = json.loads(row["config_json"] or "{}")
+            if isinstance(user_cfg, dict):
+                for key, val in user_cfg.items():
+                    if isinstance(val, dict) and isinstance(cfg.get(key), dict):
+                        cfg[key].update(val)
+                    else:
+                        cfg[key] = val
+            if not cfg.get("agent_name") or cfg["agent_name"] == "AI Agent":
+                cfg["agent_name"] = row["name"] or "AI Agent"
+            domain_rubric = row["rubric_md"] or ""
+        finally:
+            conn.close()
+    elif args.config:
         if not args.config.is_file():
             raise FileNotFoundError(f"Config file not found: {args.config}")
         config_dir = args.config.resolve().parent
@@ -1060,15 +1199,15 @@ def _load_config(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
         cfg["judge"]["model"] = args.judge_model
 
     if not cfg.get("endpoint"):
-        raise ValueError("Missing endpoint URL. Provide --endpoint or set 'endpoint' in --config.")
+        raise ValueError("Missing endpoint URL. Configure 'endpoint' on the Eval Suite or pass --endpoint.")
 
-    # Load domain rubric text if specified via CLI or config
     rubric_path = args.rubric
     if not rubric_path and cfg["judge"].get("rubric_file"):
         rp = Path(cfg["judge"]["rubric_file"])
-        rubric_path = rp if rp.is_absolute() else (config_dir / rp)
+        cand = rp if rp.is_absolute() else (config_dir / rp)
+        if cand.is_file():
+            rubric_path = cand
 
-    domain_rubric = ""
     if rubric_path:
         if not rubric_path.is_file():
             raise FileNotFoundError(f"Rubric file not found: {rubric_path}")
@@ -1079,11 +1218,14 @@ def _load_config(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generic multi-turn concurrent UAT batch runner with Gemini LLM-as-a-Judge."
+        description="Generic multi-turn concurrent Eval batch runner with Gemini LLM-as-a-Judge."
     )
-    parser.add_argument("--config", type=Path, default=None, help="Path to uat_config.json")
-    parser.add_argument("--input", "-i", type=Path, required=True, help="Input UAT questions JSON")
-    parser.add_argument("--output", "-o", type=Path, default=Path("uat_results.json"), help="Output results JSON")
+    parser.add_argument("--db", type=Path, default=None, help="Path to ask_workbench.db SQLite store")
+    parser.add_argument("--suite-id", type=str, default=None, help="Eval suite ID inside --db")
+    parser.add_argument("--job-id", type=str, default=None, help="Optional eval_runs job_id for run history")
+    parser.add_argument("--config", type=Path, default=None, help="Path to eval config JSON (legacy mode)")
+    parser.add_argument("--input", "-i", type=Path, default=None, help="Input eval questions JSON (legacy mode)")
+    parser.add_argument("--output", "-o", type=Path, default=None, help="Output results JSON (legacy mode)")
     parser.add_argument("--endpoint", "--url", dest="endpoint", type=str, default=None, help="Agent chat endpoint URL")
     parser.add_argument("--agent-name", type=str, default=None, help="Display name of the agent under test")
     parser.add_argument("--auth-mode", choices=["none", "gcloud-id-token", "bearer-env", "header-env"], default=None, help="Endpoint auth mode")
@@ -1093,9 +1235,9 @@ def main() -> None:
     parser.add_argument("--response-mode", choices=["sse", "json"], default=None, help="Response parsing mode")
     parser.add_argument("--adapter", type=Path, default=None, help="Optional Python adapter with build_request()/parse_response()")
     parser.add_argument("--rubric", type=Path, default=None, help="Optional markdown file with domain-specific judge rules")
-    parser.add_argument("--id", type=str, default=None, help="Comma-separated test IDs to run (e.g. Q1,E003)")
-    parser.add_argument("--turn", type=int, default=None, help="Run only up to turn N, replaying earlier turns from --from-results")
-    parser.add_argument("--from-results", type=Path, default=None, help="Prior results JSON for --turn replay")
+    parser.add_argument("--id", type=str, default=None, help="Comma-separated case IDs to run (e.g. Q1,E003)")
+    parser.add_argument("--turn", type=int, default=None, help="Run only up to turn N, replaying earlier turns from DB or --from-results")
+    parser.add_argument("--from-results", type=Path, default=None, help="Prior results JSON for --turn replay (legacy mode)")
     parser.add_argument("--limit", type=int, default=None, help="Run only the first N test cases")
     parser.add_argument("--concurrency", "-c", type=int, default=None, help=f"Parallel workers (default: {DEFAULT_CONCURRENCY})")
     parser.add_argument("--project-id", type=str, default=None, help="GCP Project ID for Vertex AI judge")
@@ -1105,6 +1247,11 @@ def main() -> None:
     parser.add_argument("--runs", "-n", type=int, default=1, help="Number of sequential batch iterations for variance testing")
 
     args = parser.parse_args()
+    if not (args.db and args.suite_id) and not args.input:
+        parser.error("Provide either (--db and --suite-id) or -i/--input JSON path.")
+    if not args.db and not args.output:
+        args.output = Path("eval_results.json")
+
     config, domain_rubric = _load_config(args)
     adapter = _load_adapter(args.adapter)
 
@@ -1114,7 +1261,7 @@ def main() -> None:
         for run_idx in range(1, total_runs + 1):
             run_out = (
                 args.output.with_name(f"{args.output.stem}_run{run_idx}{args.output.suffix}")
-                if total_runs > 1
+                if (args.output and total_runs > 1)
                 else args.output
             )
             if total_runs > 1:
@@ -1131,11 +1278,15 @@ def main() -> None:
                 target_turn=args.turn,
                 from_results=args.from_results,
                 adapter=adapter,
+                db_path=args.db,
+                suite_id=args.suite_id,
+                job_id=args.job_id,
             )
             if total_runs > 1:
-                args.output.write_text(
-                    json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8"
-                )
+                if args.output and not args.db:
+                    args.output.write_text(
+                        json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8"
+                    )
                 if not args.no_eval and results:
                     score = sum(float((r.get("uat_review") or {}).get("score", 0.0)) for r in results)
                     run_summaries.append((run_idx, score, len(results)))

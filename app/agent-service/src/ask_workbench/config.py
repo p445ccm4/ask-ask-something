@@ -24,6 +24,18 @@ class Settings(WorkbenchSettings):
     agent_service_port: int = 8000
     data_dir: Path = AGENT_SERVICE_DIR / ".data"
 
+    @property
+    def workbench_db_file(self) -> Path:
+        return self.data_dir / "ask_workbench.db"
+
+    @property
+    def templates_dir(self) -> Path:
+        return self.data_dir / "templates"
+
+    @property
+    def exports_dir(self) -> Path:
+        return self.data_dir / "exports"
+
 
 def get_settings() -> Settings:
     data_override = os.environ.get("ASK_WORKBENCH_DATA_DIR")

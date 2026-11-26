@@ -4,8 +4,8 @@ import subprocess
 from pathlib import Path
 import pytest
 
-from ask_workbench.deploy_service import execute_deploy, preview_deploy
-from ask_workbench.workspaces import WorkspaceEntry
+from ask_workbench.deploy_service import compare_envs, execute_deploy, preview_deploy
+from ask_workbench.workspaces import ProjectEntry
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -50,7 +50,6 @@ def test_deploy_to_dev_scopes_strictly_to_service_and_pushes(tmp_path: Path) -> 
     dev_repo, dev_bare = _init_monorepo(tmp_path, "dev_monorepo", "demo-project-dev")
     uat_repo, _ = _init_monorepo(tmp_path, "uat_monorepo", "demo-project-uat")
 
-    # Modify sample-agent-service AND sibling other-service AND transient results / ephemeral artifacts
     (dev_repo / "sample-agent-service" / "src" / "prompt.py").write_text(
         'SYSTEM_PROMPT = "v2 fixed"\n', encoding="utf-8"
     )
@@ -63,31 +62,31 @@ def test_deploy_to_dev_scopes_strictly_to_service_and_pushes(tmp_path: Path) -> 
     )
     (dev_repo / "other-service" / "main.py").write_text("print('dirty sibling')\n", encoding="utf-8")
 
-    ws = WorkspaceEntry(
-        id="sample-agent-dev",
-        name="Sample Agent (DEV)",
-        path=str(dev_repo / "sample-agent-service"),
-        uat_path=str(uat_repo / "sample-agent-service"),
-        env="dev",
+    proj = ProjectEntry(
+        id="sample-agent",
+        name="Sample Agent",
+        active_env="dev",
+        environments={
+            "dev": str(dev_repo / "sample-agent-service"),
+            "uat": str(uat_repo / "sample-agent-service"),
+        },
     )
 
-    prev = preview_deploy(ws, "dev")
+    prev = preview_deploy(proj, "dev")
     assert prev.can_deploy is True
     assert prev.mode == "direct_push"
     assert [f.path for f in prev.changed_files] == ["src/prompt.py"]
     assert "other-service" not in prev.diff
     assert ".ag-artifacts" not in prev.diff
 
-    res = execute_deploy(ws, "dev", "fix(sample-agent-service): update prompt v2")
+    res = execute_deploy(proj, "dev", "fix(sample-agent-service): update prompt v2")
     assert res.ok is True
     assert res.commit_sha
     assert res.pushed_files == ["src/prompt.py"]
 
-    # Sibling dirty file must still be uncommitted in dev_repo
     sibling_status = _git(dev_repo, "status", "--porcelain", "--", "other-service")
     assert "other-service/main.py" in sibling_status
 
-    # Bare remote received only sample-agent-service/src/prompt.py
     pushed_files = _git(dev_bare, "show", "--name-only", "--pretty=format:", "main")
     assert "sample-agent-service/src/prompt.py" in pushed_files
     assert "other-service/main.py" not in pushed_files
@@ -95,61 +94,88 @@ def test_deploy_to_dev_scopes_strictly_to_service_and_pushes(tmp_path: Path) -> 
     assert ".ag-artifacts" not in pushed_files
 
 
-def test_deploy_to_uat_promotes_code_while_protecting_config_py(tmp_path: Path) -> None:
-    dev_repo, _ = _init_monorepo(tmp_path, "dev_monorepo", "demo-project-dev")
+def test_deploy_to_uat_and_prod_promotes_while_protecting_config_py(tmp_path: Path) -> None:
+    sbx_repo, _ = _init_monorepo(tmp_path, "sbx_monorepo", "demo-project-sbx")
+    dev_repo, dev_bare = _init_monorepo(tmp_path, "dev_monorepo", "demo-project-dev")
     uat_repo, uat_bare = _init_monorepo(tmp_path, "uat_monorepo", "demo-project-uat")
+    prod_repo, prod_bare = _init_monorepo(tmp_path, "prod_monorepo", "demo-project-prod")
 
-    # Update DEV prompt and add new helper module
-    (dev_repo / "sample-agent-service" / "src" / "prompt.py").write_text(
+    # Feature branch in SBX is allowed to push directly
+    _git(sbx_repo, "checkout", "-b", "feat/sbx-exp")
+    (sbx_repo / "sample-agent-service" / "src" / "prompt.py").write_text(
         'SYSTEM_PROMPT = "v2 fixed"\n', encoding="utf-8"
     )
-    (dev_repo / "sample-agent-service" / "src" / "new_helper.py").write_text(
+    (sbx_repo / "sample-agent-service" / "src" / "new_helper.py").write_text(
         "def helper(): return 42\n", encoding="utf-8"
     )
 
-    ws = WorkspaceEntry(
-        id="sample-agent-dev",
-        name="Sample Agent (DEV)",
-        path=str(dev_repo / "sample-agent-service"),
-        uat_path=str(uat_repo / "sample-agent-service"),
-        env="dev",
+    proj = ProjectEntry(
+        id="sample-agent",
+        name="Sample Agent",
+        active_env="sbx",
+        environments={
+            "sbx": str(sbx_repo / "sample-agent-service"),
+            "dev": str(dev_repo / "sample-agent-service"),
+            "uat": str(uat_repo / "sample-agent-service"),
+            "prod": str(prod_repo / "sample-agent-service"),
+        },
     )
 
-    prev = preview_deploy(ws, "uat")
-    assert prev.can_deploy is True
-    assert prev.mode == "promote_from_dev"
-    assert {f.path for f in prev.changed_files} == {"src/prompt.py", "src/new_helper.py"}
-    assert [f.path for f in prev.protected_files] == ["src/config.py"]
+    # SBX direct push works on non-main feature branch
+    sbx_prev = preview_deploy(proj, "sbx")
+    assert sbx_prev.can_deploy is True
+    assert sbx_prev.branch == "feat/sbx-exp"
 
-    res = execute_deploy(ws, "uat", "fix(sample-agent-service): promote v2 from dev to uat")
-    assert res.ok is True
-    assert (uat_repo / "sample-agent-service" / "src" / "prompt.py").read_text(encoding="utf-8") == (
-        'SYSTEM_PROMPT = "v2 fixed"\n'
+    # Promote SBX -> DEV
+    dev_promo_prev = preview_deploy(proj, "dev", deploy_mode="promote", source_env="sbx")
+    assert dev_promo_prev.can_deploy is True
+    assert dev_promo_prev.source_env == "sbx"
+    assert {f.path for f in dev_promo_prev.changed_files} == {"src/prompt.py", "src/new_helper.py"}
+    assert [f.path for f in dev_promo_prev.protected_files] == ["src/config.py"]
+
+    res_dev = execute_deploy(
+        proj, "dev", "feat: promote sbx->dev", deploy_mode="promote", source_env="sbx"
     )
-    # UAT config.py must remain untouched!
-    assert (uat_repo / "sample-agent-service" / "src" / "config.py").read_text(encoding="utf-8") == (
-        'PROJECT_ID = "demo-project-uat"\n'
-    )
+    assert res_dev.ok is True
+    assert "v2 fixed" in _git(dev_bare, "show", "main:sample-agent-service/src/prompt.py")
+    assert "demo-project-dev" in _git(dev_bare, "show", "main:sample-agent-service/src/config.py")
 
-    remote_prompt = _git(uat_bare, "show", "main:sample-agent-service/src/prompt.py")
-    assert "v2 fixed" in remote_prompt
-    remote_cfg = _git(uat_bare, "show", "main:sample-agent-service/src/config.py")
-    assert "demo-project-uat" in remote_cfg
+    # Promote DEV -> UAT
+    prev_uat = preview_deploy(proj, "uat")
+    assert prev_uat.can_deploy is True
+    assert prev_uat.mode == "promote_from_dev"
+    res_uat = execute_deploy(proj, "uat", "fix: promote v2 from dev to uat")
+    assert res_uat.ok is True
+    assert "v2 fixed" in _git(uat_bare, "show", "main:sample-agent-service/src/prompt.py")
+    assert "demo-project-uat" in _git(uat_bare, "show", "main:sample-agent-service/src/config.py")
+
+    # Promote UAT -> PROD
+    prev_prod = preview_deploy(proj, "prod")
+    assert prev_prod.can_deploy is True
+    assert prev_prod.source_env == "uat"
+    assert prev_prod.mode == "promote"
+    res_prod = execute_deploy(proj, "prod", "release: promote uat->prod")
+    assert res_prod.ok is True
+    assert "v2 fixed" in _git(prod_bare, "show", "main:sample-agent-service/src/prompt.py")
+    assert "demo-project-prod" in _git(prod_bare, "show", "main:sample-agent-service/src/config.py")
+
+    cmp = compare_envs(proj, source_env="uat", target_env="prod", include_config_py=False)
+    assert cmp["in_sync"] is True
 
 
-def test_deploy_refuses_non_main_branch(tmp_path: Path) -> None:
+def test_deploy_refuses_non_main_branch_for_dev_uat_prod(tmp_path: Path) -> None:
     dev_repo, _ = _init_monorepo(tmp_path, "dev_monorepo", "demo-project-dev")
     _git(dev_repo, "checkout", "-b", "feature/test")
     (dev_repo / "sample-agent-service" / "src" / "prompt.py").write_text("changed\n", encoding="utf-8")
 
-    ws = WorkspaceEntry(
-        id="sample-agent-dev",
-        name="Sample Agent (DEV)",
-        path=str(dev_repo / "sample-agent-service"),
-        env="dev",
+    proj = ProjectEntry(
+        id="sample-agent",
+        name="Sample Agent",
+        active_env="dev",
+        environments={"dev": str(dev_repo / "sample-agent-service")},
     )
-    prev = preview_deploy(ws, "dev")
+    prev = preview_deploy(proj, "dev")
     assert prev.can_deploy is False
     assert "main" in (prev.blocking_reason or "")
     with pytest.raises(ValueError, match="main"):
-        execute_deploy(ws, "dev", "should fail")
+        execute_deploy(proj, "dev", "should fail")

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="askask-solar" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ED171F" />
+      <stop offset="60%" stop-color="#EA4120" />
+      <stop offset="100%" stop-color="#FF8F00" />
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#askask-solar)" />
+  <path
+    d="M17.5 47L26.2 18H31.8L40.5 47H34.9L33.1 40.3H24.9L23.1 47H17.5ZM26.2 35.5H31.8L29 25L26.2 35.5Z"
+    fill="#FFFFFF"
+  />
+  <path
+    d="M45.5 16L47.3 20.4L52 19.6L48.7 23L51.7 26.8L47 25.5L45.5 30L44 25.5L39.3 26.8L42.3 23L39 19.6L43.7 20.4L45.5 16Z"
+    fill="#FFCC00"
+  />
+</svg>

@@ -73,7 +73,8 @@ trap cleanup EXIT INT TERM
 echo "[AskAsk* Workbench] Starting FastAPI + Antigravity service (prod) on http://127.0.0.1:${AGENT_PORT} ..."
 (
   cd "$APP_DIR/agent-service"
-  exec env UV_PYTHON_INSTALL_DIR=/tmp/uv-python uv run uvicorn ask_workbench.main:app \
+  exec env PYTHONPATH="$APP_DIR/agent-service/src:$APP_DIR/vendor/antigravity-workbench/backend/src${PYTHONPATH:+:$PYTHONPATH}" \
+    UV_PYTHON_INSTALL_DIR=/tmp/uv-python uv run --no-sync uvicorn ask_workbench.main:app \
     --host 127.0.0.1 \
     --port "$AGENT_PORT"
 ) &

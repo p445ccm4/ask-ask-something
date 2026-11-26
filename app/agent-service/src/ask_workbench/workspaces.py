@@ -1,25 +1,72 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from pathlib import Path
 from typing import Any
 from ag_workbench.artifacts import AG_ARTIFACTS_DIR_NAME
 from pydantic import BaseModel, Field
 
+from .ask_workbench_db import VALID_ENVS, AskWorkbenchDB, EnvName, slugify_id
+
 
 class WorkspaceEntry(BaseModel):
+    """Legacy/single-workspace compatibility representation convertible to ProjectEntry."""
+
     id: str
     name: str
     path: str
     uat_path: str | None = None
     env: str = "dev"
 
+    def to_project_entry(self) -> ProjectEntry:
+        envs: dict[str, str] = {}
+        active: EnvName = self.env if self.env in VALID_ENVS else "dev"  # type: ignore[assignment]
+        if self.path and self.path.strip():
+            envs[active] = self.path.strip()
+        if self.uat_path and self.uat_path.strip() and "uat" not in envs:
+            envs["uat"] = self.uat_path.strip()
+        return ProjectEntry(
+            id=self.id,
+            name=self.name,
+            active_env=active,
+            environments=envs,
+        )
+
+
+class ProjectEntry(BaseModel):
+    id: str
+    name: str
+    active_env: EnvName = "dev"
+    environments: dict[str, str] = Field(default_factory=dict)
+
+    @property
+    def path(self) -> str:
+        if self.active_env in self.environments:
+            return self.environments[self.active_env]
+        for env in VALID_ENVS:
+            if env in self.environments:
+                return self.environments[env]
+        return ""
+
+    @property
+    def uat_path(self) -> str | None:
+        return self.environments.get("uat")
+
+    @property
+    def configured_envs(self) -> list[EnvName]:
+        return [e for e in VALID_ENVS if e in self.environments and self.environments[e].strip()]
+
+    def path_for_env(self, env: str | None = None) -> str:
+        target = env or self.active_env
+        if target in self.environments and self.environments[target].strip():
+            return self.environments[target]
+        raise ValueError(f"Environment '{target}' is not configured on project '{self.name}'.")
+
 
 class GitChangedFile(BaseModel):
     status: str
-    path: str  # Relative to workspace service root
+    path: str  # Relative to service root
 
 
 class WorkspaceGitInfo(BaseModel):
@@ -33,23 +80,42 @@ class WorkspaceGitInfo(BaseModel):
     diff: str = ""
 
 
-class WorkspaceSummary(BaseModel):
-    id: str
-    name: str
+class EnvGitSummary(BaseModel):
+    env: EnvName
     path: str
-    uat_path: str | None = None
-    uat_exists: bool = False
-    env: str = "dev"
-    exists: bool = True
-    has_uat_config: bool = False
-    has_uat_questions: bool = False
-    has_uat_results: bool = False
+    exists: bool = False
     branch: str | None = None
     dirty_count: int = 0
     unpushed_count: int = 0
-    uat_branch: str | None = None
-    uat_dirty_count: int = 0
-    uat_unpushed_count: int = 0
+    remote_url: str | None = None
+
+
+class EnvEvalBrief(BaseModel):
+    suite_count: int = 0
+    default_suite_id: str | None = None
+    default_suite_name: str | None = None
+    endpoint: str | None = None
+    total_cases: int = 0
+    evaluated_cases: int = 0
+    pass_count: int = 0
+    partial_count: int = 0
+    fail_count: int = 0
+    score_pct: float = 0.0
+
+
+class ProjectSummary(BaseModel):
+    id: str
+    name: str
+    active_env: EnvName = "dev"
+    path: str
+    exists: bool = True
+    environments: dict[str, str] = Field(default_factory=dict)
+    configured_envs: list[EnvName] = Field(default_factory=list)
+    env_git: dict[str, EnvGitSummary] = Field(default_factory=dict)
+    env_eval: dict[str, EnvEvalBrief] = Field(default_factory=dict)
+    branch: str | None = None
+    dirty_count: int = 0
+    unpushed_count: int = 0
 
 
 _TRANSIENT_PREFIXES = (
@@ -63,11 +129,6 @@ _TRANSIENT_PREFIXES = (
     "node_modules/",
     ".next/",
 )
-
-
-def _slugify(name: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    return slug or "workspace"
 
 
 def _run_git(cwd: Path, args: list[str], timeout: float = 10.0) -> subprocess.CompletedProcess[str]:
@@ -190,176 +251,248 @@ def inspect_workspace_git(ws_path: Path) -> WorkspaceGitInfo:
     )
 
 
-class WorkspaceRegistry:
+class ProjectRegistry:
+    """SQLite-backed Project & Multi-Environment Registry (replaces legacy workspaces.json)."""
+
     def __init__(
         self,
-        registry_file: Path,
+        db: AskWorkbenchDB,
+        *,
+        legacy_registry_file: Path | None = None,
         seed_defaults: bool = True,
         default_workspaces_json: str = "",
     ) -> None:
-        self._file = registry_file
+        self._db = db
+        self._legacy_file = legacy_registry_file
         self._seed_defaults = seed_defaults
         self._default_workspaces_json = default_workspaces_json
         self._ensure_initialized()
 
-    def _default_candidates(self) -> list[WorkspaceEntry]:
-        raw_cfg = (self._default_workspaces_json or "").strip()
-        if not raw_cfg:
-            return []
-        try:
-            items = json.loads(raw_cfg)
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(items, list):
-            return []
-
-        entries: list[WorkspaceEntry] = []
-        used_ids: set[str] = set()
-        for item in items:
-            if not isinstance(item, dict) or not item.get("path"):
-                continue
-            resolved = Path(str(item["path"])).expanduser()
-            if not resolved.is_dir():
-                continue
-            name = str(item.get("name") or resolved.name).strip()
-            ws_id = str(item.get("id") or _slugify(name)).strip()
-            while ws_id in used_ids:
-                ws_id = f"{ws_id}-2"
-            used_ids.add(ws_id)
-            uat_raw = item.get("uat_path")
-            uat_str = str(Path(str(uat_raw)).expanduser()) if uat_raw else None
-            entries.append(
-                WorkspaceEntry(
-                    id=ws_id,
-                    name=name,
-                    path=str(resolved),
-                    uat_path=uat_str,
-                    env=str(item.get("env") or "dev"),
-                )
-            )
-        return entries
-
     def _ensure_initialized(self) -> None:
-        if self._file.is_file():
+        if self._db.count_projects() > 0:
             return
-        self._file.parent.mkdir(parents=True, exist_ok=True)
-        initial = self._default_candidates() if self._seed_defaults else []
-        self._save(initial)
 
-    def _load(self) -> list[WorkspaceEntry]:
-        if not self._file.is_file():
-            return []
-        raw = json.loads(self._file.read_text(encoding="utf-8"))
-        return [WorkspaceEntry.model_validate(item) for item in raw]
+        if self._legacy_file and self._legacy_file.is_file():
+            try:
+                raw_items = json.loads(self._legacy_file.read_text(encoding="utf-8"))
+                if isinstance(raw_items, list):
+                    for item in raw_items:
+                        self._seed_item(item)
+                    if self._db.count_projects() > 0:
+                        return
+            except (OSError, json.JSONDecodeError):
+                pass
 
-    def _save(self, entries: list[WorkspaceEntry]) -> None:
-        self._file.parent.mkdir(parents=True, exist_ok=True)
-        payload = [e.model_dump() for e in entries]
-        self._file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        if self._seed_defaults and (self._default_workspaces_json or "").strip():
+            try:
+                items = json.loads(self._default_workspaces_json)
+                if isinstance(items, list):
+                    for item in items:
+                        self._seed_item(item)
+            except json.JSONDecodeError:
+                pass
 
-    def list_entries(self) -> list[WorkspaceEntry]:
-        return self._load()
+    def _seed_item(self, item: Any) -> None:
+        if not isinstance(item, dict):
+            return
+        envs: dict[str, str] = {}
+        if isinstance(item.get("environments"), dict):
+            for env in VALID_ENVS:
+                val = item["environments"].get(env)
+                if val and str(val).strip():
+                    p = Path(str(val)).expanduser()
+                    if p.is_dir():
+                        envs[env] = str(p.resolve())
+        elif item.get("path"):
+            p = Path(str(item["path"])).expanduser()
+            env_key = str(item.get("env") or "dev").lower()
+            if env_key not in VALID_ENVS:
+                env_key = "dev"
+            if p.is_dir():
+                envs[env_key] = str(p.resolve())
+            if item.get("uat_path"):
+                up = Path(str(item["uat_path"])).expanduser()
+                if up.is_dir():
+                    envs["uat"] = str(up.resolve())
 
-    def get_entry(self, ws_id: str) -> WorkspaceEntry:
-        for entry in self._load():
-            if entry.id == ws_id:
-                return entry
-        raise KeyError(f"Workspace not found: {ws_id}")
+        if not envs:
+            return
 
-    def add_entry(
+        name = str(item.get("name") or next(iter(envs.values()))).strip()
+        pid = str(item.get("id") or slugify_id(name, "project")).strip()
+        active_env = str(item.get("active_env") or item.get("env") or "dev").lower()
+        if active_env not in envs:
+            active_env = "dev" if "dev" in envs else next(iter(envs.keys()))
+        try:
+            self._db.create_project(
+                name=name,
+                environments=envs,
+                project_id=pid,
+                active_env=active_env,
+            )
+        except ValueError:
+            pass
+
+    @staticmethod
+    def _row_to_entry(row: dict[str, Any]) -> ProjectEntry:
+        return ProjectEntry(
+            id=row["id"],
+            name=row["name"],
+            active_env=row["active_env"],
+            environments=row["environments"],
+        )
+
+    def _validate_env_paths(
+        self, environments: dict[str, str | None]
+    ) -> dict[str, str]:
+        resolved: dict[str, str] = {}
+        for env in VALID_ENVS:
+            raw = environments.get(env)
+            if raw is None or not str(raw).strip():
+                continue
+            p = Path(str(raw)).expanduser().resolve()
+            if not p.is_dir():
+                raise ValueError(f"{env.upper()} directory does not exist: {p}")
+            resolved[env] = str(p)
+        return resolved
+
+    def list_entries(self) -> list[ProjectEntry]:
+        return [self._row_to_entry(r) for r in self._db.list_projects()]
+
+    def get_entry(self, project_id: str) -> ProjectEntry:
+        return self._row_to_entry(self._db.get_project(project_id))
+
+    def all_registered_paths(self) -> set[Path]:
+        paths: set[Path] = set()
+        for entry in self.list_entries():
+            for p_str in entry.environments.values():
+                if p_str.strip():
+                    paths.add(Path(p_str).expanduser().resolve())
+        return paths
+
+    def add_project(
         self,
         name: str,
-        path: str,
-        uat_path: str | None = None,
-        env: str = "dev",
-    ) -> WorkspaceEntry:
-        resolved = Path(path).expanduser().resolve()
-        if not resolved.is_dir():
-            raise ValueError(f"Directory does not exist: {resolved}")
+        environments: dict[str, str | None],
+        *,
+        active_env: str | None = None,
+        project_id: str | None = None,
+    ) -> ProjectEntry:
+        clean_envs = self._validate_env_paths(environments)
+        if not clean_envs:
+            raise ValueError(
+                "At least one environment repository path (SBX, DEV, UAT, or PROD) is required."
+            )
 
-        uat_resolved_str: str | None = None
-        if uat_path and uat_path.strip():
-            uat_p = Path(uat_path).expanduser().resolve()
-            if not uat_p.is_dir():
-                raise ValueError(f"UAT directory does not exist: {uat_p}")
-            uat_resolved_str = str(uat_p)
-
-        entries = self._load()
-        for idx, existing in enumerate(entries):
-            if Path(existing.path).resolve() == resolved:
-                if uat_resolved_str is not None and existing.uat_path != uat_resolved_str:
-                    updated = existing.model_copy(update={"uat_path": uat_resolved_str})
-                    entries[idx] = updated
-                    self._save(entries)
-                    return updated
+        # If an existing project has the exact same set of configured paths, return/merge cleanly
+        for existing in self.list_entries():
+            if existing.environments == clean_envs:
                 return existing
 
-        base_id = _slugify(name or resolved.name)
-        existing_ids = {e.id for e in entries}
-        ws_id = base_id
-        counter = 2
-        while ws_id in existing_ids:
-            ws_id = f"{base_id}-{counter}"
-            counter += 1
+        chosen_active = active_env if active_env in clean_envs else None
+        if not chosen_active:
+            chosen_active = "dev" if "dev" in clean_envs else next(
+                e for e in VALID_ENVS if e in clean_envs
+            )
+        fallback_name = name.strip() or Path(clean_envs[chosen_active]).name
+        created = self._db.create_project(
+            name=fallback_name,
+            environments=clean_envs,
+            project_id=project_id,
+            active_env=chosen_active,
+        )
+        return self._row_to_entry(created)
 
-        new_entry = WorkspaceEntry(
-            id=ws_id,
-            name=name.strip() or resolved.name,
-            path=str(resolved),
-            uat_path=uat_resolved_str,
-            env=env,
-        )
-        entries.append(new_entry)
-        self._save(entries)
-        return new_entry
+    def update_project(
+        self,
+        project_id: str,
+        *,
+        name: str | None = None,
+        environments: dict[str, str | None] | None = None,
+        active_env: str | None = None,
+    ) -> ProjectEntry:
+        validated_envs: dict[str, str | None] | None = None
+        if environments is not None:
+            validated_envs = {}
+            for env in VALID_ENVS:
+                if env not in environments:
+                    continue
+                raw = environments[env]
+                if raw is None or not str(raw).strip():
+                    validated_envs[env] = ""
+                else:
+                    p = Path(str(raw)).expanduser().resolve()
+                    if not p.is_dir():
+                        raise ValueError(f"{env.upper()} directory does not exist: {p}")
+                    validated_envs[env] = str(p)
 
-    def summarize(self, entry: WorkspaceEntry) -> WorkspaceSummary:
-        p = Path(entry.path)
-        exists = p.is_dir()
-        uat_dir = p / "scripts" / "uat"
-        dev_dir = p / "scripts" / "dev"
-        has_cfg = (uat_dir / "uat_config.json").is_file() or (dev_dir / "uat_config.json").is_file()
-        has_q = (
-            (uat_dir / "uat_questions.json").is_file()
-            or (dev_dir / "uat_questions.json").is_file()
-            or (dev_dir / "uat_questions_full.json").is_file()
+        updated = self._db.update_project(
+            project_id,
+            name=name,
+            environments=validated_envs,
+            active_env=active_env,
         )
-        has_res = (
-            (uat_dir / "results" / "uat_results.json").is_file()
-            or (dev_dir / "uat_results.json").is_file()
-            or (dev_dir / "results" / "uat_results.json").is_file()
-        )
-        git_info = inspect_workspace_git(p) if exists else WorkspaceGitInfo()
-        uat_exists = bool(entry.uat_path and Path(entry.uat_path).is_dir())
-        uat_git_info = (
-            inspect_workspace_git(Path(entry.uat_path))
-            if uat_exists and entry.uat_path
-            else WorkspaceGitInfo()
-        )
-        return WorkspaceSummary(
+        return self._row_to_entry(updated)
+
+    def delete_project(self, project_id: str) -> bool:
+        return self._db.delete_project(project_id)
+
+    def summarize(self, entry: ProjectEntry) -> ProjectSummary:
+        env_git: dict[str, EnvGitSummary] = {}
+        env_eval: dict[str, EnvEvalBrief] = {}
+
+        for env in VALID_ENVS:
+            raw_path = entry.environments.get(env)
+            if not raw_path or not raw_path.strip():
+                continue
+            p = Path(raw_path)
+            exists = p.is_dir()
+            git_info = inspect_workspace_git(p) if exists else WorkspaceGitInfo()
+            env_git[env] = EnvGitSummary(
+                env=env,
+                path=raw_path,
+                exists=exists,
+                branch=git_info.branch,
+                dirty_count=len(git_info.changed_files),
+                unpushed_count=len(git_info.unpushed_commits),
+                remote_url=git_info.remote_url,
+            )
+
+            suites_page = self._db.list_suites(entry.id, env, limit=1, offset=0)
+            suite_count = int(suites_page["total"])
+            if suites_page["suites"]:
+                top = suites_page["suites"][0]
+                env_eval[env] = EnvEvalBrief(
+                    suite_count=suite_count,
+                    default_suite_id=top["id"],
+                    default_suite_name=top["name"],
+                    endpoint=top.get("endpoint") or None,
+                    total_cases=top["total_cases"],
+                    evaluated_cases=top["evaluated_cases"],
+                    pass_count=top["pass_count"],
+                    partial_count=top["partial_count"],
+                    fail_count=top["fail_count"],
+                    score_pct=top["score_pct"],
+                )
+            else:
+                env_eval[env] = EnvEvalBrief(suite_count=0)
+
+        active_git = env_git.get(entry.active_env)
+        active_path = entry.path
+        return ProjectSummary(
             id=entry.id,
             name=entry.name,
-            path=entry.path,
-            uat_path=entry.uat_path,
-            uat_exists=uat_exists,
-            env=entry.env,
-            exists=exists,
-            has_uat_config=has_cfg,
-            has_uat_questions=has_q,
-            has_uat_results=has_res,
-            branch=git_info.branch,
-            dirty_count=len(git_info.changed_files),
-            unpushed_count=len(git_info.unpushed_commits),
-            uat_branch=uat_git_info.branch,
-            uat_dirty_count=len(uat_git_info.changed_files),
-            uat_unpushed_count=len(uat_git_info.unpushed_commits),
+            active_env=entry.active_env,
+            path=active_path,
+            exists=bool(active_git.exists) if active_git else Path(active_path).is_dir(),
+            environments=dict(entry.environments),
+            configured_envs=entry.configured_envs,
+            env_git=env_git,
+            env_eval=env_eval,
+            branch=active_git.branch if active_git else None,
+            dirty_count=active_git.dirty_count if active_git else 0,
+            unpushed_count=active_git.unpushed_count if active_git else 0,
         )
 
-    def list_summaries(self) -> list[WorkspaceSummary]:
-        return [self.summarize(e) for e in self._load()]
-
-
-def summarize_dict(obj: Any) -> dict[str, Any]:
-    if isinstance(obj, BaseModel):
-        return obj.model_dump()
-    raise TypeError(f"Unsupported type: {type(obj)}")
+    def list_summaries(self) -> list[ProjectSummary]:
+        return [self.summarize(e) for e in self.list_entries()]

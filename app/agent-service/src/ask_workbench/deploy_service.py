@@ -7,15 +7,24 @@ from pathlib import Path
 from typing import Any, Literal
 from pydantic import BaseModel, Field
 
+from .ask_workbench_db import VALID_ENVS, EnvName
 from .workspaces import (
+    ProjectEntry,
     WorkspaceEntry,
     inspect_workspace_git,
     is_transient_service_relpath,
     normalize_service_relpath,
 )
 
-TargetEnv = Literal["dev", "uat"]
-DeployMode = Literal["auto", "direct_push", "promote_from_dev"]
+TargetEnv = EnvName
+DeployMode = Literal["auto", "direct_push", "promote", "promote_from_dev"]
+
+_DEFAULT_UPSTREAM: dict[EnvName, EnvName | None] = {
+    "sbx": None,
+    "dev": "sbx",
+    "uat": "dev",
+    "prod": "uat",
+}
 
 _PROMOTION_SKIP_PREFIXES = (
     ".venv/",
@@ -48,7 +57,8 @@ class DeployFileItem(BaseModel):
 
 class DeployPreview(BaseModel):
     target_env: TargetEnv
-    mode: Literal["direct_push", "promote_from_dev"]
+    source_env: TargetEnv | None = None
+    mode: Literal["direct_push", "promote", "promote_from_dev"]
     workspace_id: str
     workspace_name: str
     repo_toplevel: str | None = None
@@ -62,19 +72,30 @@ class DeployPreview(BaseModel):
     can_deploy: bool = False
     blocking_reason: str | None = None
     suggested_commit_message: str = ""
+    has_direct_target_changes: bool = False
+    direct_target_files: list[str] = Field(default_factory=list)
+    # Kept for clarity alongside generic target fields
     has_direct_uat_changes: bool = False
     direct_uat_files: list[str] = Field(default_factory=list)
     overlap_conflict_files: list[str] = Field(default_factory=list)
+    available_source_envs: list[EnvName] = Field(default_factory=list)
 
 
 class DeployResult(BaseModel):
     ok: bool
     target_env: TargetEnv
+    source_env: TargetEnv | None = None
     commit_sha: str | None = None
     branch: str = "main"
     remote_url: str | None = None
     pushed_files: list[str] = Field(default_factory=list)
     logs: list[str] = Field(default_factory=list)
+
+
+def _as_project(project_or_ws: ProjectEntry | WorkspaceEntry) -> ProjectEntry:
+    if isinstance(project_or_ws, ProjectEntry):
+        return project_or_ws
+    return project_or_ws.to_project_entry()
 
 
 def _run_git_checked(cwd: Path, args: list[str], logs: list[str], timeout: float = 60.0) -> str:
@@ -124,27 +145,30 @@ def _should_skip_promotion(rel_path: str) -> bool:
     return False
 
 
-def _collect_dev_to_uat_changes(
-    dev_dir: Path,
-    uat_dir: Path,
+def _collect_env_promotion_changes(
+    src_dir: Path,
+    dst_dir: Path,
+    *,
+    src_label: str,
+    dst_label: str,
     include_config_py: bool = False,
 ) -> tuple[list[DeployFileItem], list[DeployFileItem], str]:
     changed: list[DeployFileItem] = []
     protected: list[DeployFileItem] = []
     diff_chunks: list[str] = []
 
-    dev_resolved = dev_dir.resolve()
-    uat_resolved = uat_dir.resolve()
+    src_resolved = src_dir.resolve()
+    dst_resolved = dst_dir.resolve()
 
-    for src_file in sorted(dev_resolved.rglob("*")):
-        if not src_file.is_file() or not _is_within_root(src_file, dev_resolved):
+    for src_file in sorted(src_resolved.rglob("*")):
+        if not src_file.is_file() or not _is_within_root(src_file, src_resolved):
             continue
-        rel = src_file.relative_to(dev_resolved).as_posix()
+        rel = src_file.relative_to(src_resolved).as_posix()
         if _should_skip_promotion(rel):
             continue
 
-        dst_file = uat_resolved / rel
-        if dst_file.exists() and not _is_within_root(dst_file, uat_resolved):
+        dst_file = dst_resolved / rel
+        if dst_file.exists() and not _is_within_root(dst_file, dst_resolved):
             continue
         src_bytes = src_file.read_bytes()
         dst_exists = dst_file.is_file()
@@ -159,7 +183,7 @@ def _collect_dev_to_uat_changes(
                     path=rel,
                     status="PROTECTED",
                     protected=True,
-                    reason="Preserving UAT environment PROJECT_ID and bucket configuration",
+                    reason=f"Preserving {dst_label.upper()} environment PROJECT_ID and configuration",
                 )
             )
             continue
@@ -179,8 +203,8 @@ def _collect_dev_to_uat_changes(
             difflib.unified_diff(
                 dst_lines,
                 src_lines,
-                fromfile=f"uat/{rel}" if dst_exists else "/dev/null",
-                tofile=f"dev/{rel}",
+                fromfile=f"{dst_label}/{rel}" if dst_exists else "/dev/null",
+                tofile=f"{src_label}/{rel}",
             )
         )
         if udiff.strip():
@@ -189,294 +213,335 @@ def _collect_dev_to_uat_changes(
     return changed, protected, "\n\n".join(diff_chunks)
 
 
-def compare_dev_and_uat(
-    workspace: WorkspaceEntry,
+def compare_envs(
+    project_or_ws: ProjectEntry | WorkspaceEntry,
+    source_env: TargetEnv = "dev",
+    target_env: TargetEnv = "uat",
     include_config_py: bool = True,
     max_diff_chars: int = 20000,
 ) -> dict[str, Any]:
-    raw_uat = (workspace.uat_path or "").strip()
-    if not raw_uat:
-        return {"error": f"No paired UAT repository is configured for workspace '{workspace.name}'."}
+    proj = _as_project(project_or_ws)
+    src_raw = (proj.environments.get(source_env) or "").strip()
+    dst_raw = (proj.environments.get(target_env) or "").strip()
+    if not src_raw:
+        return {"error": f"No {source_env.upper()} repository is configured for project '{proj.name}'."}
+    if not dst_raw:
+        return {"error": f"No {target_env.upper()} repository is configured for project '{proj.name}'."}
 
-    dev_root = Path(workspace.path).expanduser().resolve()
-    if not dev_root.is_dir():
-        return {"error": f"DEV directory not found: {dev_root}"}
+    src_root = Path(src_raw).expanduser().resolve()
+    dst_root = Path(dst_raw).expanduser().resolve()
+    if not src_root.is_dir():
+        return {"error": f"{source_env.upper()} directory not found: {src_root}"}
+    if not dst_root.is_dir():
+        return {"error": f"{target_env.upper()} directory not found: {dst_root}"}
 
-    uat_root = Path(raw_uat).expanduser().resolve()
-    if not uat_root.is_dir():
-        return {"error": f"Paired UAT directory not found: {uat_root}"}
-
-    changed, protected, diff_text = _collect_dev_to_uat_changes(
-        dev_root,
-        uat_root,
+    changed, protected, diff_text = _collect_env_promotion_changes(
+        src_root,
+        dst_root,
+        src_label=source_env,
+        dst_label=target_env,
         include_config_py=include_config_py,
     )
 
-    uat_only_files: list[str] = []
-    uat_only_diffs: list[str] = []
-    for uat_file in sorted(uat_root.rglob("*")):
-        if not uat_file.is_file() or not _is_within_root(uat_file, uat_root):
+    target_only_files: list[str] = []
+    target_only_diffs: list[str] = []
+    for dst_file in sorted(dst_root.rglob("*")):
+        if not dst_file.is_file() or not _is_within_root(dst_file, dst_root):
             continue
-        rel = uat_file.relative_to(uat_root).as_posix()
+        rel = dst_file.relative_to(dst_root).as_posix()
         if _should_skip_promotion(rel):
             continue
         if rel == PROTECTED_CONFIG_RELPATH and not include_config_py:
             continue
-        if not (dev_root / rel).is_file():
-            uat_only_files.append(rel)
+        if not (src_root / rel).is_file():
+            target_only_files.append(rel)
             try:
-                uat_lines = uat_file.read_bytes().decode("utf-8", errors="replace").splitlines(keepends=True)
+                dst_lines = dst_file.read_bytes().decode("utf-8", errors="replace").splitlines(keepends=True)
                 udiff = "".join(
                     difflib.unified_diff(
-                        uat_lines,
+                        dst_lines,
                         [],
-                        fromfile=f"uat/{rel}",
+                        fromfile=f"{target_env}/{rel}",
                         tofile="/dev/null",
                     )
                 )
                 if udiff.strip():
-                    uat_only_diffs.append(udiff.rstrip())
+                    target_only_diffs.append(udiff.rstrip())
             except OSError:
                 pass
 
-    combined_diff = "\n\n".join(part for part in [diff_text, *uat_only_diffs] if part.strip())
+    combined_diff = "\n\n".join(part for part in [diff_text, *target_only_diffs] if part.strip())
     bounded_chars = max(1000, int(max_diff_chars))
     diff_truncated = len(combined_diff) > bounded_chars
     if diff_truncated:
         combined_diff = combined_diff[:bounded_chars] + "\n... [diff truncated]"
 
-    dev_git = inspect_workspace_git(dev_root)
-    uat_git = inspect_workspace_git(uat_root)
+    src_git = inspect_workspace_git(src_root)
+    dst_git = inspect_workspace_git(dst_root)
 
     return {
-        "dev_path": str(dev_root),
-        "uat_path": str(uat_root),
-        "dev_branch": dev_git.branch,
-        "uat_branch": uat_git.branch,
-        "in_sync": not changed and not uat_only_files,
+        "source_env": source_env,
+        "target_env": target_env,
+        "source_path": str(src_root),
+        "target_path": str(dst_root),
+        "source_branch": src_git.branch,
+        "target_branch": dst_git.branch,
+        "in_sync": not changed and not target_only_files,
         "changed_files": [f.model_dump() for f in changed],
         "protected_files": [f.model_dump() for f in protected],
-        "uat_only_files": uat_only_files,
+        "target_only_files": target_only_files,
+        # Backwards-compatible aliases
+        "dev_path": str(src_root),
+        "uat_path": str(dst_root),
+        "dev_branch": src_git.branch,
+        "uat_branch": dst_git.branch,
+        "uat_only_files": target_only_files,
         "diff": combined_diff,
         "diff_truncated": diff_truncated,
     }
 
 
+def compare_dev_and_uat(
+    project_or_ws: ProjectEntry | WorkspaceEntry,
+    include_config_py: bool = True,
+    max_diff_chars: int = 20000,
+) -> dict[str, Any]:
+    return compare_envs(
+        project_or_ws,
+        source_env="dev",
+        target_env="uat",
+        include_config_py=include_config_py,
+        max_diff_chars=max_diff_chars,
+    )
+
+
+def _resolve_source_env(
+    proj: ProjectEntry,
+    target_env: TargetEnv,
+    explicit_source: TargetEnv | None,
+) -> TargetEnv | None:
+    if explicit_source and explicit_source != target_env and explicit_source in proj.environments:
+        return explicit_source
+    default_up = _DEFAULT_UPSTREAM.get(target_env)
+    if default_up and default_up in proj.environments:
+        return default_up
+    # Fallback to any upstream env before target_env in order
+    idx = VALID_ENVS.index(target_env)
+    for prev in reversed(VALID_ENVS[:idx]):
+        if prev in proj.environments:
+            return prev
+    return None
+
+
 def preview_deploy(
-    workspace: WorkspaceEntry,
+    project_or_ws: ProjectEntry | WorkspaceEntry,
     target_env: TargetEnv,
     include_config_py: bool = False,
     deploy_mode: DeployMode = "auto",
     force_overwrite_uat: bool = False,
+    source_env: TargetEnv | None = None,
+    force_overwrite: bool | None = None,
 ) -> DeployPreview:
-    ws_path = Path(workspace.path)
-    service_slug = ws_path.name
+    proj = _as_project(project_or_ws)
+    overwrite_flag = force_overwrite if force_overwrite is not None else force_overwrite_uat
+    available_sources = [e for e in VALID_ENVS if e != target_env and e in proj.environments]
 
-    if target_env == "dev":
-        git_info = inspect_workspace_git(ws_path)
-        files = [DeployFileItem(path=f.path, status=f.status) for f in git_info.changed_files]
-        blocking: str | None = None
-        if not git_info.is_git_repo:
-            blocking = "Workspace is not inside a Git repository."
-        elif git_info.branch != "main":
-            blocking = f"Expected branch 'main', but repo is on '{git_info.branch}'."
-        elif not files and not git_info.unpushed_commits:
-            blocking = "No uncommitted changes or unpushed commits found for this service."
-
+    target_raw = (proj.environments.get(target_env) or "").strip()
+    if not target_raw:
         return DeployPreview(
-            target_env="dev",
+            target_env=target_env,
             mode="direct_push",
-            workspace_id=workspace.id,
-            workspace_name=workspace.name,
-            repo_toplevel=git_info.git_toplevel,
-            service_subpath=git_info.service_subpath,
-            branch=git_info.branch,
-            remote_url=git_info.remote_url,
-            changed_files=files,
-            protected_files=[],
-            unpushed_commits=git_info.unpushed_commits,
-            diff=git_info.diff,
-            can_deploy=(blocking is None),
-            blocking_reason=blocking,
-            suggested_commit_message=f"fix({service_slug}): update {service_slug} in dev",
-        )
-
-    # target_env == "uat"
-    if workspace.env == "uat" or not workspace.uat_path:
-        target_path = Path(workspace.uat_path) if workspace.uat_path else ws_path
-        if workspace.env != "uat" and not workspace.uat_path:
-            return DeployPreview(
-                target_env="uat",
-                mode="direct_push",
-                workspace_id=workspace.id,
-                workspace_name=workspace.name,
-                can_deploy=False,
-                blocking_reason="No paired UAT repository path is configured for this workspace.",
-            )
-        git_info = inspect_workspace_git(target_path)
-        files = [DeployFileItem(path=f.path, status=f.status) for f in git_info.changed_files]
-        direct_files = [f.path for f in files]
-        blocking = None
-        if not git_info.is_git_repo:
-            blocking = "UAT directory is not inside a Git repository."
-        elif git_info.branch != "main":
-            blocking = f"Expected UAT branch 'main', but repo is on '{git_info.branch}'."
-        elif not files and not git_info.unpushed_commits:
-            blocking = "No uncommitted changes or unpushed commits found in UAT."
-        return DeployPreview(
-            target_env="uat",
-            mode="direct_push",
-            workspace_id=workspace.id,
-            workspace_name=workspace.name,
-            repo_toplevel=git_info.git_toplevel,
-            service_subpath=git_info.service_subpath,
-            branch=git_info.branch,
-            remote_url=git_info.remote_url,
-            changed_files=files,
-            unpushed_commits=git_info.unpushed_commits,
-            diff=git_info.diff,
-            can_deploy=(blocking is None),
-            blocking_reason=blocking,
-            suggested_commit_message=f"fix({service_slug}): update {service_slug} in uat",
-            has_direct_uat_changes=bool(direct_files),
-            direct_uat_files=direct_files,
-        )
-
-    # Paired UAT repository exists on a DEV workspace
-    uat_path = Path(workspace.uat_path)
-    requested_mode: Literal["direct_push", "promote_from_dev"] = (
-        "direct_push" if deploy_mode == "direct_push" else "promote_from_dev"
-    )
-    if not uat_path.is_dir():
-        return DeployPreview(
-            target_env="uat",
-            mode=requested_mode,
-            workspace_id=workspace.id,
-            workspace_name=workspace.name,
+            workspace_id=proj.id,
+            workspace_name=proj.name,
             can_deploy=False,
-            blocking_reason=f"Paired UAT directory not found: {uat_path}",
+            blocking_reason=f"No {target_env.upper()} repository path is configured for project '{proj.name}'.",
+            available_source_envs=available_sources,
         )
 
-    uat_git = inspect_workspace_git(uat_path)
-    direct_uat_files = [f.path for f in uat_git.changed_files]
-    direct_uat_set = set(direct_uat_files)
-    has_direct_uat_changes = bool(direct_uat_files)
+    target_path = Path(target_raw).expanduser()
+    service_slug = target_path.name
+    if not target_path.is_dir():
+        return DeployPreview(
+            target_env=target_env,
+            mode="direct_push",
+            workspace_id=proj.id,
+            workspace_name=proj.name,
+            can_deploy=False,
+            blocking_reason=f"{target_env.upper()} directory not found: {target_path}",
+            available_source_envs=available_sources,
+        )
 
-    promo_files, protected_files, promo_diff = _collect_dev_to_uat_changes(
-        ws_path, uat_path, include_config_py=include_config_py
-    )
-    promo_paths = {f.path for f in promo_files}
-    overlap_conflict_files = sorted(promo_paths & direct_uat_set)
+    resolved_source = _resolve_source_env(proj, target_env, source_env)
+    target_git = inspect_workspace_git(target_path)
+    direct_files = [f.path for f in target_git.changed_files]
+    direct_set = set(direct_files)
+    has_direct = bool(direct_files)
 
-    if deploy_mode == "direct_push":
-        resolved_mode: Literal["direct_push", "promote_from_dev"] = "direct_push"
-    elif deploy_mode == "promote_from_dev":
-        resolved_mode = "promote_from_dev"
+    wants_promote = deploy_mode in ("promote", "promote_from_dev")
+    if deploy_mode == "direct_push" or not resolved_source:
+        resolved_mode: Literal["direct_push", "promote_from_dev", "promote"] = "direct_push"
+    elif wants_promote:
+        resolved_mode = "promote_from_dev" if (resolved_source == "dev" and target_env == "uat") else "promote"
     else:
-        # "auto": prefer direct_push when UAT has uncommitted edits (or unpushed commits with no DEV diff)
-        if (has_direct_uat_changes and (not promo_files or promo_paths.issubset(direct_uat_set))) or (
-            not promo_files and bool(uat_git.unpushed_commits)
-        ):
+        # "auto": sbx & dev default to direct_push; uat & prod promote unless direct local target edits exist
+        if target_env in ("sbx", "dev"):
             resolved_mode = "direct_push"
         else:
-            resolved_mode = "promote_from_dev"
+            src_path = Path(proj.environments[resolved_source]).expanduser()
+            promo_files_probe, _, _ = _collect_env_promotion_changes(
+                src_path,
+                target_path,
+                src_label=resolved_source,
+                dst_label=target_env,
+                include_config_py=include_config_py,
+            )
+            promo_paths_probe = {f.path for f in promo_files_probe}
+            if (has_direct and (not promo_files_probe or promo_paths_probe.issubset(direct_set))) or (
+                not promo_files_probe and bool(target_git.unpushed_commits)
+            ):
+                resolved_mode = "direct_push"
+            else:
+                resolved_mode = (
+                    "promote_from_dev"
+                    if (resolved_source == "dev" and target_env == "uat")
+                    else "promote"
+                )
+
+    require_main = target_env != "sbx"
 
     if resolved_mode == "direct_push":
-        direct_items = [DeployFileItem(path=f.path, status=f.status) for f in uat_git.changed_files]
-        blocking = None
-        if not uat_git.is_git_repo:
-            blocking = "Paired UAT path is not a Git repository."
-        elif uat_git.branch != "main":
-            blocking = f"Expected UAT branch 'main', but repo is on '{uat_git.branch}'."
-        elif not direct_items and not uat_git.unpushed_commits:
-            blocking = "No uncommitted changes or unpushed commits found in UAT."
+        files = [DeployFileItem(path=f.path, status=f.status) for f in target_git.changed_files]
+        blocking: str | None = None
+        if not target_git.is_git_repo:
+            blocking = f"{target_env.upper()} path is not inside a Git repository."
+        elif require_main and target_git.branch != "main":
+            blocking = f"Expected {target_env.upper()} branch 'main', but repo is on '{target_git.branch}'."
+        elif not files and not target_git.unpushed_commits:
+            blocking = f"No uncommitted changes or unpushed commits found in {target_env.upper()}."
 
         return DeployPreview(
-            target_env="uat",
+            target_env=target_env,
+            source_env=resolved_source,
             mode="direct_push",
-            workspace_id=workspace.id,
-            workspace_name=workspace.name,
-            repo_toplevel=uat_git.git_toplevel,
-            service_subpath=uat_git.service_subpath,
-            branch=uat_git.branch,
-            remote_url=uat_git.remote_url,
-            changed_files=direct_items,
+            workspace_id=proj.id,
+            workspace_name=proj.name,
+            repo_toplevel=target_git.git_toplevel,
+            service_subpath=target_git.service_subpath,
+            branch=target_git.branch,
+            remote_url=target_git.remote_url,
+            changed_files=files,
             protected_files=[],
-            unpushed_commits=uat_git.unpushed_commits,
-            diff=uat_git.diff,
+            unpushed_commits=target_git.unpushed_commits,
+            diff=target_git.diff,
             can_deploy=(blocking is None),
             blocking_reason=blocking,
-            suggested_commit_message=f"fix({service_slug}): update {service_slug} in uat",
-            has_direct_uat_changes=has_direct_uat_changes,
-            direct_uat_files=direct_uat_files,
+            suggested_commit_message=f"fix({service_slug}): update {service_slug} in {target_env}",
+            has_direct_target_changes=has_direct,
+            direct_target_files=direct_files,
+            has_direct_uat_changes=has_direct if target_env == "uat" else False,
+            direct_uat_files=direct_files if target_env == "uat" else [],
             overlap_conflict_files=[],
+            available_source_envs=available_sources,
         )
 
-    # resolved_mode == "promote_from_dev"
-    blocking = None
-    if not uat_git.is_git_repo:
-        blocking = "Paired UAT path is not a Git repository."
-    elif uat_git.branch != "main":
-        blocking = f"Expected UAT branch 'main', but repo is on '{uat_git.branch}'."
-    elif overlap_conflict_files and not force_overwrite_uat:
-        blocking = (
-            "Direct uncommitted UAT changes in "
-            f"{', '.join(overlap_conflict_files)} overlap with DEV -> UAT promotion. "
-            "Switch to 'Push Direct UAT Changes' or enable overwrite."
+    assert resolved_source is not None
+    src_path = Path(proj.environments[resolved_source]).expanduser()
+    if not src_path.is_dir():
+        return DeployPreview(
+            target_env=target_env,
+            source_env=resolved_source,
+            mode=resolved_mode,
+            workspace_id=proj.id,
+            workspace_name=proj.name,
+            can_deploy=False,
+            blocking_reason=f"Source {resolved_source.upper()} directory not found: {src_path}",
+            available_source_envs=available_sources,
         )
-    elif not promo_files and not uat_git.unpushed_commits:
-        blocking = "UAT service code is already in sync with DEV (and has no unpushed commits)."
+
+    promo_files, protected_files, promo_diff = _collect_env_promotion_changes(
+        src_path,
+        target_path,
+        src_label=resolved_source,
+        dst_label=target_env,
+        include_config_py=include_config_py,
+    )
+    promo_paths = {f.path for f in promo_files}
+    overlap_conflict_files = sorted(promo_paths & direct_set)
+
+    blocking = None
+    if not target_git.is_git_repo:
+        blocking = f"{target_env.upper()} path is not a Git repository."
+    elif require_main and target_git.branch != "main":
+        blocking = f"Expected {target_env.upper()} branch 'main', but repo is on '{target_git.branch}'."
+    elif overlap_conflict_files and not overwrite_flag:
+        blocking = (
+            f"Direct uncommitted {target_env.upper()} changes in "
+            f"{', '.join(overlap_conflict_files)} overlap with {resolved_source.upper()} -> {target_env.upper()} promotion. "
+            f"Switch to 'Push Direct {target_env.upper()} Changes' or enable overwrite."
+        )
+    elif not promo_files and not target_git.unpushed_commits:
+        blocking = (
+            f"{target_env.upper()} service code is already in sync with {resolved_source.upper()} "
+            "(and has no unpushed commits)."
+        )
 
     return DeployPreview(
-        target_env="uat",
-        mode="promote_from_dev",
-        workspace_id=workspace.id,
-        workspace_name=workspace.name,
-        repo_toplevel=uat_git.git_toplevel,
-        service_subpath=uat_git.service_subpath,
-        branch=uat_git.branch,
-        remote_url=uat_git.remote_url,
+        target_env=target_env,
+        source_env=resolved_source,
+        mode=resolved_mode,
+        workspace_id=proj.id,
+        workspace_name=proj.name,
+        repo_toplevel=target_git.git_toplevel,
+        service_subpath=target_git.service_subpath,
+        branch=target_git.branch,
+        remote_url=target_git.remote_url,
         changed_files=promo_files,
         protected_files=protected_files,
-        unpushed_commits=uat_git.unpushed_commits,
+        unpushed_commits=target_git.unpushed_commits,
         diff=promo_diff,
         can_deploy=(blocking is None),
         blocking_reason=blocking,
-        suggested_commit_message=f"fix({service_slug}): sync {service_slug} changes from dev to uat",
-        has_direct_uat_changes=has_direct_uat_changes,
-        direct_uat_files=direct_uat_files,
+        suggested_commit_message=f"fix({service_slug}): promote {service_slug} from {resolved_source} to {target_env}",
+        has_direct_target_changes=has_direct,
+        direct_target_files=direct_files,
+        has_direct_uat_changes=has_direct if target_env == "uat" else False,
+        direct_uat_files=direct_files if target_env == "uat" else [],
         overlap_conflict_files=overlap_conflict_files,
+        available_source_envs=available_sources,
     )
 
 
 def execute_deploy(
-    workspace: WorkspaceEntry,
+    workspace: ProjectEntry | WorkspaceEntry,
     target_env: TargetEnv,
     commit_message: str,
     selected_files: list[str] | None = None,
     include_config_py: bool = False,
     deploy_mode: DeployMode = "auto",
     force_overwrite_uat: bool = False,
+    source_env: TargetEnv | None = None,
+    force_overwrite: bool | None = None,
 ) -> DeployResult:
-    """Human-initiated scoped commit + git push origin main. Never exposed as an agent tool."""
+    """Human-initiated scoped commit + git push. Never exposed as an agent tool."""
+    proj = _as_project(workspace)
+    overwrite_flag = force_overwrite if force_overwrite is not None else force_overwrite_uat
     logs: list[str] = []
     preview = preview_deploy(
-        workspace,
+        proj,
         target_env,
         include_config_py=include_config_py,
         deploy_mode=deploy_mode,
-        force_overwrite_uat=force_overwrite_uat,
+        force_overwrite_uat=overwrite_flag,
+        source_env=source_env,
     )
     if not preview.can_deploy:
         raise ValueError(preview.blocking_reason or "Deployment preconditions not met.")
 
+    target_service_dir = Path(proj.path_for_env(target_env)).resolve()
     promoted_rel_set: set[str] | None = None
-    if target_env == "dev":
-        target_service_dir = Path(workspace.path).resolve()
-    elif preview.mode == "promote_from_dev":
-        assert workspace.uat_path is not None
-        dev_service_dir = Path(workspace.path).resolve()
-        target_service_dir = Path(workspace.uat_path).resolve()
+
+    if preview.mode in ("promote", "promote_from_dev") and preview.source_env:
+        src_service_dir = Path(proj.path_for_env(preview.source_env)).resolve()
         candidate_paths = [f.path for f in preview.changed_files]
         files_to_sync = (
             [p for p in candidate_paths if p in set(selected_files)]
@@ -487,23 +552,19 @@ def execute_deploy(
         for rel in files_to_sync:
             if rel == PROTECTED_CONFIG_RELPATH and not include_config_py:
                 continue
-            src_f = _safe_service_relpath(dev_service_dir, rel)
+            src_f = _safe_service_relpath(src_service_dir, rel)
             dst_f = _safe_service_relpath(target_service_dir, rel)
             if src_f.is_file():
                 dst_f.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src_f, dst_f)
-                logs.append(f"Synced DEV -> UAT: {rel}")
-    else:
-        target_service_dir = (
-            Path(workspace.uat_path).resolve()
-            if workspace.uat_path
-            else Path(workspace.path).resolve()
-        )
+                logs.append(f"Synced {preview.source_env.upper()} -> {target_env.upper()}: {rel}")
 
     git_info = inspect_workspace_git(target_service_dir)
-    if not git_info.is_git_repo or not git_info.git_toplevel:
+    if not git_info.is_git_repo or not git_info.git_toplevel or not git_info.branch:
         raise ValueError("Target directory is not a valid Git repository.")
-    if git_info.branch != "main":
+
+    expected_branch = "main" if target_env != "sbx" else git_info.branch
+    if target_env != "sbx" and git_info.branch != "main":
         raise ValueError(f"Refusing to push: repository is on branch '{git_info.branch}', expected 'main'.")
 
     toplevel = Path(git_info.git_toplevel).resolve()
@@ -535,17 +596,22 @@ def execute_deploy(
         raise ValueError("No files selected and no unpushed commits to push.")
 
     if git_info.remote_url:
-        _run_git_checked(toplevel, ["fetch", "origin", "main"], logs, timeout=60.0)
+        _run_git_checked(toplevel, ["fetch", "origin", expected_branch], logs, timeout=60.0)
         behind_res = subprocess.run(
-            ["git", "-C", str(toplevel), "rev-list", "--count", "HEAD..origin/main"],
+            ["git", "-C", str(toplevel), "rev-list", "--count", f"HEAD..origin/{expected_branch}"],
             capture_output=True,
             text=True,
             check=False,
         )
         if behind_res.returncode == 0 and int((behind_res.stdout or "0").strip() or "0") > 0:
-            _run_git_checked(toplevel, ["pull", "--rebase", "--autostash", "origin", "main"], logs, timeout=90.0)
+            _run_git_checked(
+                toplevel,
+                ["pull", "--rebase", "--autostash", "origin", expected_branch],
+                logs,
+                timeout=90.0,
+            )
 
-        _run_git_checked(toplevel, ["push", "origin", "main"], logs, timeout=90.0)
+        _run_git_checked(toplevel, ["push", "origin", expected_branch], logs, timeout=90.0)
     else:
         raise ValueError("No 'origin' git remote configured on repository.")
 
@@ -553,8 +619,9 @@ def execute_deploy(
     return DeployResult(
         ok=True,
         target_env=target_env,
+        source_env=preview.source_env if preview.mode != "direct_push" else None,
         commit_sha=sha,
-        branch="main",
+        branch=expected_branch,
         remote_url=git_info.remote_url,
         pushed_files=chosen_rel_files,
         logs=logs,

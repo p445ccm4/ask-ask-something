@@ -2,33 +2,42 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Lock, Rocket, ShieldCheck, X } from "lucide-react";
-import type { DeployMode, DeployPreview, DeployResult, TargetEnv } from "@/lib/types";
 import { apiUrl } from "@/lib/basePath";
+import {
+  ENV_ORDER,
+  type DeployMode,
+  type DeployPreview,
+  type DeployResult,
+  type EnvName,
+  type ProjectSummary,
+  type TargetEnv,
+} from "@/lib/types";
 import { DiffViewer } from "./DiffViewer";
 
 interface DeployModalProps {
   open: boolean;
-  workspaceId: string;
-  workspaceName: string;
-  targetEnv: TargetEnv;
+  project: ProjectSummary | null;
+  initialTargetEnv: TargetEnv;
   onClose: () => void;
   onDeployed: () => void;
 }
 
 export function DeployModal({
   open,
-  workspaceId,
-  workspaceName,
-  targetEnv,
+  project,
+  initialTargetEnv,
   onClose,
   onDeployed,
 }: DeployModalProps) {
+  const configuredEnvs = project?.configured_envs || [];
+  const [targetEnv, setTargetEnv] = useState<TargetEnv>(initialTargetEnv);
+  const [sourceEnv, setSourceEnv] = useState<TargetEnv | "">("");
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState<DeployPreview | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
   const [includeConfigPy, setIncludeConfigPy] = useState(false);
   const [deployMode, setDeployMode] = useState<DeployMode>("auto");
-  const [forceOverwriteUat, setForceOverwriteUat] = useState(false);
+  const [forceOverwrite, setForceOverwrite] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   const commitMessageTouchedRef = useRef(false);
   const [executing, setExecuting] = useState(false);
@@ -36,18 +45,44 @@ export function DeployModal({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open || !workspaceId) return;
+    if (!open) return;
+    setTargetEnv(
+      configuredEnvs.includes(initialTargetEnv)
+        ? initialTargetEnv
+        : configuredEnvs[0] || "dev"
+    );
+    setSourceEnv("");
+    setCommitMessage("");
+    commitMessageTouchedRef.current = false;
+    setIncludeConfigPy(false);
+    setDeployMode("auto");
+    setForceOverwrite(false);
+    setResult(null);
+    setError(null);
+  }, [open, initialTargetEnv, project?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!open || !project) return;
     let active = true;
     const loadPreview = async () => {
       setLoading(true);
       setError(null);
       setResult(null);
       try {
+        const params = new URLSearchParams({
+          target_env: targetEnv,
+          include_config_py: String(includeConfigPy),
+          deploy_mode: deployMode,
+          force_overwrite: String(forceOverwrite),
+        });
+        if (sourceEnv && sourceEnv !== targetEnv) {
+          params.set("source_env", sourceEnv);
+        }
         const res = await fetch(
           apiUrl(
-            `/api/workspaces/${encodeURIComponent(
-              workspaceId
-            )}/deploy/preview?target_env=${targetEnv}&include_config_py=${includeConfigPy}&deploy_mode=${deployMode}&force_overwrite_uat=${forceOverwriteUat}`
+            `/api/projects/${encodeURIComponent(
+              project.id
+            )}/deploy/preview?${params.toString()}`
           )
         );
         const data = await res.json();
@@ -67,27 +102,27 @@ export function DeployModal({
         if (active) setLoading(false);
       }
     };
-    loadPreview();
+    void loadPreview();
     return () => {
       active = false;
     };
-  }, [open, workspaceId, targetEnv, includeConfigPy, deployMode, forceOverwriteUat]);
+  }, [
+    open,
+    project,
+    targetEnv,
+    sourceEnv,
+    includeConfigPy,
+    deployMode,
+    forceOverwrite,
+  ]);
 
-  useEffect(() => {
-    if (open) {
-      setCommitMessage("");
-      commitMessageTouchedRef.current = false;
-      setIncludeConfigPy(false);
-      setDeployMode("auto");
-      setForceOverwriteUat(false);
-    }
-  }, [open, targetEnv, workspaceId]);
-
-  if (!open) return null;
+  if (!open || !project) return null;
 
   const toggleFile = (filePath: string) => {
     setSelectedFiles((prev) =>
-      prev.includes(filePath) ? prev.filter((p) => p !== filePath) : [...prev, filePath]
+      prev.includes(filePath)
+        ? prev.filter((p) => p !== filePath)
+        : [...prev, filePath]
     );
   };
 
@@ -97,17 +132,18 @@ export function DeployModal({
     setError(null);
     try {
       const res = await fetch(
-        apiUrl(`/api/workspaces/${encodeURIComponent(workspaceId)}/deploy/execute`),
+        apiUrl(`/api/projects/${encodeURIComponent(project.id)}/deploy/execute`),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             target_env: targetEnv,
+            source_env: sourceEnv || preview.source_env || undefined,
             commit_message: commitMessage,
             selected_files: selectedFiles,
             include_config_py: includeConfigPy,
             deploy_mode: deployMode,
-            force_overwrite_uat: forceOverwriteUat,
+            force_overwrite: forceOverwrite,
           }),
         }
       );
@@ -125,6 +161,15 @@ export function DeployModal({
   };
 
   const envLabel = targetEnv.toUpperCase();
+  const availSources = (preview?.available_source_envs || []).filter(
+    (e) => e !== targetEnv
+  );
+  const directConflictCount =
+    preview?.direct_target_files?.length ??
+    preview?.direct_uat_files?.length ??
+    0;
+  const directConflictFiles =
+    preview?.direct_target_files ?? preview?.direct_uat_files ?? [];
   const canSubmit =
     Boolean(preview?.can_deploy) &&
     !executing &&
@@ -135,22 +180,20 @@ export function DeployModal({
   return (
     <div className="animate-view-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-[2px]">
       <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-bea-border bg-bea-card shadow-2xl">
+        {/* Header */}
         <div className="flex items-center justify-between border-b border-bea-border px-6 py-4">
           <div className="flex items-center gap-3">
-            <div
-              className={`flex h-9 w-9 items-center justify-center rounded-xl text-white ${
-                targetEnv === "uat" ? "bg-bea-emerald" : "bg-bea-teal-solid"
-              }`}
-            >
+            <div className="white-on-solar flex h-9 w-9 items-center justify-center rounded-xl shadow-xs">
               <Rocket className="h-5 w-5" />
             </div>
             <div>
               <h2 className="text-base font-bold text-bea-text-strong">
-                Deploy {workspaceName} to {envLabel}
+                Deploy / Promote {project.name} → {envLabel}
               </h2>
               <p className="text-xs text-bea-text-secondary">
-                Commits scoped service files and runs{" "}
-                <code className="font-semibold text-bea-text-strong">git push origin main</code> to trigger Cloud Build.
+                {targetEnv === "sbx"
+                  ? "Stages scoped service files and pushes the Sandbox branch to origin."
+                  : "Stages scoped service files and pushes to origin/main (with src/config.py protection)."}
               </p>
             </div>
           </div>
@@ -163,35 +206,94 @@ export function DeployModal({
           </button>
         </div>
 
+        {/* Body */}
         <div className="flex-1 space-y-4 overflow-y-auto bg-bea-canvas/40 p-6">
-          {targetEnv === "uat" && !result && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-bea-border bg-bea-card px-4 py-2.5 text-xs">
-              <span className="font-semibold text-bea-text-secondary">UAT Deploy Mode:</span>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {(
-                  [
-                    ["auto", "Auto"],
-                    ["direct_push", "Push Direct UAT Changes"],
-                    ["promote_from_dev", "Promote DEV → UAT"],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => {
-                      setDeployMode(value);
-                      if (value !== "promote_from_dev") setForceOverwriteUat(false);
-                    }}
-                    className={`cursor-pointer rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition ${
-                      deployMode === value
-                        ? "border-bea-emerald bg-bea-emerald text-white shadow-2xs"
-                        : "border-bea-border bg-bea-canvas/60 text-bea-text-secondary hover:text-bea-text-strong"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
+          {/* Target Env + Mode Bar */}
+          {!result && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-bea-border bg-bea-card px-4 py-2.5 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-bea-text-secondary">
+                  Target Env:
+                </span>
+                <div className="inline-flex rounded-lg border border-bea-border bg-bea-canvas p-0.5">
+                  {ENV_ORDER.filter((e) => configuredEnvs.includes(e)).map(
+                    (env) => (
+                      <button
+                        key={env}
+                        type="button"
+                        onClick={() => {
+                          setTargetEnv(env);
+                          setSourceEnv("");
+                          setDeployMode("auto");
+                          setForceOverwrite(false);
+                          commitMessageTouchedRef.current = false;
+                        }}
+                        className={`cursor-pointer rounded-md px-2.5 py-1 text-[11px] font-bold uppercase transition ${
+                          targetEnv === env
+                            ? "bg-solar-red text-white shadow-2xs"
+                            : "text-bea-text-secondary hover:text-bea-text-strong"
+                        }`}
+                      >
+                        {env}
+                      </button>
+                    )
+                  )}
+                </div>
               </div>
+
+              {availSources.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-semibold text-bea-text-secondary">
+                    Mode:
+                  </span>
+                  {(
+                    [
+                      ["auto", "Auto"],
+                      ["direct_push", `Push Direct ${envLabel}`],
+                      ["promote", "Promote From"],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => {
+                        setDeployMode(value);
+                        if (value !== "promote") setForceOverwrite(false);
+                      }}
+                      className={`cursor-pointer rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition ${
+                        deployMode === value ||
+                        (value === "promote" &&
+                          deployMode === "promote_from_dev")
+                          ? "border-bea-teal bg-bea-teal-solid text-white shadow-2xs"
+                          : "border-bea-border bg-bea-canvas/60 text-bea-text-secondary hover:text-bea-text-strong"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+
+                  {(deployMode === "promote" ||
+                    deployMode === "auto" ||
+                    preview?.mode === "promote" ||
+                    preview?.mode === "promote_from_dev") && (
+                    <select
+                      value={sourceEnv || preview?.source_env || availSources[0] || ""}
+                      onChange={(e) => {
+                        setSourceEnv(e.target.value as EnvName);
+                        setDeployMode("promote");
+                      }}
+                      aria-label="Promotion source environment"
+                      className="rounded-lg border border-bea-border bg-bea-canvas px-2 py-1 text-[11px] font-bold uppercase text-bea-text-strong"
+                    >
+                      {availSources.map((src) => (
+                        <option key={src} value={src}>
+                          {src.toUpperCase()}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -212,12 +314,15 @@ export function DeployModal({
             <div className="space-y-3 rounded-xl border border-bea-emerald/50 bg-bea-emerald/10 p-4">
               <div className="flex items-center gap-2 text-sm font-bold text-bea-teal">
                 <CheckCircle2 className="h-5 w-5 text-bea-emerald" />
-                Pushed to {envLabel} (<code>origin/main</code> @ {result.commit_sha})
+                Pushed to {envLabel} (<code>{result.branch}</code>
+                {result.commit_sha ? ` @ ${result.commit_sha}` : ""})
               </div>
-              <p className="text-xs text-bea-text-primary">
-                Cloud Source Repositories trigger on <code>main</code> has been notified for{" "}
-                <code className="text-bea-blue">{result.remote_url}</code>.
-              </p>
+              {result.remote_url && (
+                <p className="text-xs text-bea-text-primary">
+                  Remote updated:{" "}
+                  <code className="text-bea-blue">{result.remote_url}</code>
+                </p>
+              )}
               <pre className="max-h-56 overflow-auto rounded-lg border border-bea-border bg-bea-card p-3 font-mono text-[11px] text-bea-text-primary">
                 {result.logs.join("\n")}
               </pre>
@@ -234,58 +339,60 @@ export function DeployModal({
                   </div>
                 </div>
                 <div>
-                  <span className="text-bea-text-secondary">Scoped Path &amp; Branch: </span>
+                  <span className="text-bea-text-secondary">
+                    Scoped Path &amp; Branch:{" "}
+                  </span>
                   <div className="mt-0.5 font-mono text-bea-text-strong">
                     {preview.service_subpath}/ ({preview.branch || "unknown"})
-                    {preview.mode === "promote_from_dev" ? (
+                    {preview.mode !== "direct_push" ? (
                       <span className="ml-2 select-none rounded bg-bea-emerald/15 px-1.5 py-0.5 text-[10px] font-semibold text-bea-teal">
-                        DEV → UAT Promotion
+                        {(preview.source_env || "SRC").toUpperCase()} → {envLabel} Promotion
                       </span>
                     ) : (
-                      targetEnv === "uat" && (
-                        <span className="ml-2 select-none rounded bg-bea-teal/15 px-1.5 py-0.5 text-[10px] font-semibold text-bea-teal">
-                          Direct UAT Push
-                        </span>
-                      )
+                      <span className="ml-2 select-none rounded bg-bea-teal/15 px-1.5 py-0.5 text-[10px] font-semibold text-bea-teal">
+                        Direct {envLabel} Push
+                      </span>
                     )}
                   </div>
                 </div>
               </div>
 
-              {preview.mode === "promote_from_dev" &&
-                preview.has_direct_uat_changes &&
-                (preview.direct_uat_files?.length ?? 0) > 0 && (
+              {preview.mode !== "direct_push" &&
+                (preview.has_direct_target_changes || preview.has_direct_uat_changes) &&
+                directConflictCount > 0 && (
                   <div className="space-y-2 rounded-xl border border-solar-orange/45 bg-solar-yellow/15 p-3.5 text-xs">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="font-semibold text-bea-burgundy">
-                        Direct uncommitted changes exist in UAT ({preview.direct_uat_files?.length}):{" "}
+                        Direct uncommitted changes exist in {envLabel} ({directConflictCount}):{" "}
                         <code className="font-mono text-[11px]">
-                          {preview.direct_uat_files?.join(", ")}
+                          {directConflictFiles.join(", ")}
                         </code>
                       </div>
                       <button
                         type="button"
                         onClick={() => {
                           setDeployMode("direct_push");
-                          setForceOverwriteUat(false);
+                          setForceOverwrite(false);
                         }}
                         className="cursor-pointer rounded-lg border border-bea-emerald bg-bea-emerald px-2.5 py-1 text-[11px] font-semibold text-white transition hover:opacity-90"
                       >
-                        Switch to Push Direct UAT Changes
+                        Switch to Direct {envLabel} Push
                       </button>
                     </div>
                     {(preview.overlap_conflict_files?.length ?? 0) > 0 && (
                       <label className="flex cursor-pointer items-center gap-2 font-medium text-bea-burgundy">
                         <input
                           type="checkbox"
-                          checked={forceOverwriteUat}
-                          onChange={(e) => setForceOverwriteUat(e.target.checked)}
-                          className="rounded border-bea-border accent-solar-red"
+                          checked={forceOverwrite}
+                          onChange={(e) => setForceOverwrite(e.target.checked)}
+                          className="checkbox"
                         />
                         <span>
-                          Overwrite overlapping direct UAT edits (
-                          <code className="font-mono">{preview.overlap_conflict_files?.join(", ")}</code>
-                          ) with DEV version
+                          Overwrite overlapping direct {envLabel} edits (
+                          <code className="font-mono">
+                            {preview.overlap_conflict_files?.join(", ")}
+                          </code>
+                          ) with {(preview.source_env || "source").toUpperCase()} version
                         </span>
                       </label>
                     )}
@@ -298,10 +405,10 @@ export function DeployModal({
                     <Lock className="mt-0.5 h-4 w-4 shrink-0 text-bea-teal" />
                     <div>
                       <div className="font-semibold text-bea-teal">
-                        Protected UAT Configuration Preserved
+                        Protected {envLabel} Configuration Preserved
                       </div>
                       <p className="mt-0.5 text-bea-text-primary">
-                        <code>src/config.py</code> differs between DEV and UAT (PROJECT_ID &amp; GCS buckets) and is excluded automatically.
+                        <code>src/config.py</code> differs between environments (PROJECT_ID &amp; GCS buckets) and is excluded automatically.
                       </p>
                     </div>
                   </div>
@@ -310,7 +417,7 @@ export function DeployModal({
                       type="checkbox"
                       checked={includeConfigPy}
                       onChange={(e) => setIncludeConfigPy(e.target.checked)}
-                      className="rounded border-bea-border accent-solar-red"
+                      className="checkbox"
                     />
                     Override &amp; include
                   </label>
@@ -328,7 +435,8 @@ export function DeployModal({
                 <div>
                   <div className="mb-2 flex items-center justify-between">
                     <h3 className="text-xs font-semibold uppercase tracking-wide text-bea-text-secondary">
-                      Files to Stage &amp; Push ({selectedFiles.length}/{preview.changed_files.length})
+                      Files to Stage &amp; Push ({selectedFiles.length}/
+                      {preview.changed_files.length})
                     </h3>
                   </div>
                   <div className="max-h-40 space-y-1 overflow-y-auto rounded-xl border border-bea-border bg-bea-card p-2.5">
@@ -341,12 +449,14 @@ export function DeployModal({
                           type="checkbox"
                           checked={selectedFiles.includes(f.path)}
                           onChange={() => toggleFile(f.path)}
-                          className="rounded border-bea-border accent-solar-red"
+                          className="checkbox"
                         />
                         <span className="rounded bg-solar-orange/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-solar-red-orange">
                           {f.status}
                         </span>
-                        <span className="font-mono text-bea-text-strong">{f.path}</span>
+                        <span className="font-mono text-bea-text-strong">
+                          {f.path}
+                        </span>
                       </label>
                     ))}
                   </div>
@@ -390,7 +500,7 @@ export function DeployModal({
                       setCommitMessage(e.target.value);
                     }}
                     placeholder={`fix(${preview.service_subpath}): describe your fix`}
-                    className="w-full rounded-xl border border-bea-border bg-bea-card px-3.5 py-2 text-sm text-bea-text-strong placeholder-bea-text-secondary focus:border-solar-red focus:outline-none"
+                    className="input text-sm"
                   />
                 </div>
               )}
@@ -398,6 +508,7 @@ export function DeployModal({
           )}
         </div>
 
+        {/* Footer */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-bea-border bg-bea-card px-6 py-4">
           <div className="flex items-center gap-1.5 text-xs text-bea-text-secondary">
             <ShieldCheck className="h-4 w-4 text-bea-emerald" />
@@ -407,7 +518,7 @@ export function DeployModal({
             <button
               type="button"
               onClick={onClose}
-              className="cursor-pointer rounded-xl border border-bea-border px-4 py-2 text-xs font-medium text-bea-text-primary hover:bg-bea-canvas"
+              className="btn btn-secondary text-xs"
             >
               {result ? "Close" : "Cancel"}
             </button>
@@ -416,16 +527,12 @@ export function DeployModal({
                 type="button"
                 disabled={!canSubmit}
                 onClick={handleDeploy}
-                className={`inline-flex cursor-pointer items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-semibold text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-40 ${
-                  targetEnv === "uat"
-                    ? "bg-bea-emerald hover:opacity-90"
-                    : "bg-bea-teal-solid hover:opacity-90"
-                }`}
+                className="btn btn-primary text-xs"
               >
                 <Rocket className="h-3.5 w-3.5" />
                 {executing
                   ? "Committing & Pushing..."
-                  : `Push to ${envLabel} (origin/main)`}
+                  : `Push to ${envLabel} (${preview?.branch || "main"})`}
               </button>
             )}
           </div>

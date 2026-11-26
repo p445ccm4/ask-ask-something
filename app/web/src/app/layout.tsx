@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AskAsk* Workbench — UAT & Antigravity Maintainer",
+  title: "AskAsk* Workbench — Multi-Env Eval & Maintainer",
   description:
-    "Next.js + Antigravity SDK workbench for multi-repo UAT debugging, sandboxed fixes, and DEV/UAT deployments.",
+    "Multi-environment AI Eval workbench and Antigravity SDK maintainer across SBX, DEV, UAT, and PROD repositories.",
 };
 
 const THEME_INIT_SCRIPT = `

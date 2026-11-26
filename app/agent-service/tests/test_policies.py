@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from google.antigravity.hooks import hooks, policy
 from google.antigravity.types import BuiltinTools, ToolCall
 
+from ag_workbench.approval_broker import ApprovalBroker
 from ask_workbench.agent_runner import (
     build_capabilities,
     build_host_tools,
@@ -10,9 +13,9 @@ from ask_workbench.agent_runner import (
     build_system_instructions,
     is_destructive_command,
 )
-from ag_workbench.approval_broker import ApprovalBroker
-from ask_workbench.uat_service import UatService
-from ask_workbench.workspaces import WorkspaceEntry
+from ask_workbench.ask_workbench_db import AskWorkbenchDB
+from ask_workbench.uat_service import EvalService
+from ask_workbench.workspaces import ProjectEntry
 
 
 def test_is_destructive_command_catches_git_push_and_rm() -> None:
@@ -43,7 +46,7 @@ async def test_sandboxed_auto_blocks_git_push_but_allows_pytest() -> None:
         ToolCall(name="run_command", args={"command_line": "git push origin main"}),
     )
     assert res_push.allow is False
-    assert "Deploy buttons" in (res_push.message or "")
+    assert "Deploy / Promote" in (res_push.message or "")
 
     res_pytest = await hook.run(
         hooks.HookContext(),
@@ -76,16 +79,23 @@ async def test_unsandboxed_auto_disables_sandbox_and_allows_commands() -> None:
     assert res_edit.allow is True
 
 
-def test_build_system_instructions_supports_all_four_modes() -> None:
-    ws = WorkspaceEntry(id="ws", name="Sample Agent", path="/tmp/sample")
+def test_build_system_instructions_supports_all_four_modes_and_forbids_repo_uat_writes() -> None:
+    proj = ProjectEntry(
+        id="askhr",
+        name="AskHR",
+        active_env="dev",
+        environments={"sbx": "/tmp/sbx", "dev": "/tmp/dev", "uat": "/tmp/uat"},
+    )
     for mode in ("read_only", "ask_before_fix", "sandboxed_auto", "unsandboxed_auto"):
-        text = build_system_instructions(ws, mode)  # type: ignore[arg-type]
-        assert "Sample Agent" in text
+        text = build_system_instructions(proj, mode)  # type: ignore[arg-type]
+        assert "AskHR" in text
         assert "attach_output_file" in text
         assert ".ag-artifacts/" in text
+        assert "NEVER create, update, or commit `scripts/uat/*`" in text
+        assert "SQLite database" in text
 
 
-async def test_read_only_mode_blocks_writes_and_run_command() -> None:
+async def test_read_only_mode_blocks_writes_and_mutating_eval_tools() -> None:
     broker = ApprovalBroker()
 
     async def emit(_: dict) -> None:
@@ -99,21 +109,46 @@ async def test_read_only_mode_blocks_writes_and_run_command() -> None:
     policies = build_policies("read_only", "conv-1", broker, emit)
     hook = policy.enforce(policies)
 
-    for tool_name in ("edit_file", "create_file", "run_command", "run_uat_check"):
+    for tool_name in (
+        "edit_file",
+        "create_file",
+        "run_command",
+        "run_eval_check",
+        "create_or_update_eval_suite",
+        "upsert_eval_cases",
+        "import_xlsx_suite",
+    ):
         res = await hook.run(hooks.HookContext(), ToolCall(name=tool_name, args={}))
-        assert res.allow is False
+        assert res.allow is False, f"{tool_name} must be denied in read_only"
 
-    res_read = await hook.run(hooks.HookContext(), ToolCall(name="view_file", args={"AbsolutePath": "a.py"}))
+    res_read = await hook.run(
+        hooks.HookContext(), ToolCall(name="view_file", args={"AbsolutePath": "a.py"})
+    )
     assert res_read.allow is True
 
 
-def test_deploy_service_never_exposed_to_agent_tools() -> None:
-    ws = WorkspaceEntry(id="ws", name="Sample Agent", path="/tmp")
-    uat = UatService()
+def test_deploy_service_never_exposed_to_agent_tools(tmp_path: Path) -> None:
+    db = AskWorkbenchDB(tmp_path / "wb.db")
+    eval_svc = EvalService(db)
+    proj = ProjectEntry(
+        id="askhr",
+        name="AskHR",
+        active_env="dev",
+        environments={"dev": str(tmp_path)},
+    )
     for mode in ("read_only", "ask_before_fix", "sandboxed_auto", "unsandboxed_auto"):
-        tool_names = {fn.__name__ for fn in build_host_tools(ws, uat, mode)}  # type: ignore[arg-type]
+        tool_names = {fn.__name__ for fn in build_host_tools(proj, eval_svc, mode)}  # type: ignore[arg-type]
         assert "execute_deploy" not in tool_names
         assert "preview_deploy" not in tool_names
-    assert "run_uat_check" not in {fn.__name__ for fn in build_host_tools(ws, uat, "read_only")}
-    assert "run_uat_check" in {fn.__name__ for fn in build_host_tools(ws, uat, "ask_before_fix")}
-    assert "run_uat_check" in {fn.__name__ for fn in build_host_tools(ws, uat, "unsandboxed_auto")}
+
+    ro_tools = {fn.__name__ for fn in build_host_tools(proj, eval_svc, "read_only")}
+    assert "run_eval_check" not in ro_tools
+    assert "upsert_eval_cases" not in ro_tools
+    assert "create_or_update_eval_suite" not in ro_tools
+
+    for mut_mode in ("ask_before_fix", "sandboxed_auto", "unsandboxed_auto"):
+        mut_tools = {fn.__name__ for fn in build_host_tools(proj, eval_svc, mut_mode)}  # type: ignore[arg-type]
+        assert "run_eval_check" in mut_tools
+        assert "create_or_update_eval_suite" in mut_tools
+        assert "upsert_eval_cases" in mut_tools
+        assert "import_xlsx_suite" in mut_tools
