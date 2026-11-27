@@ -29,7 +29,12 @@ def _prepare_fixture(
     ws = tmp_path / "app"
     (ws / "agent-service").mkdir(parents=True)
     (ws / "web").mkdir(parents=True)
+    (ws / "vendor" / "antigravity-workbench" / "scripts").mkdir(parents=True)
     shutil.copy2(SETUP_MOUNTS, ws / "setup_mounts.sh")
+    shutil.copy2(
+        APP_DIR / "vendor" / "antigravity-workbench" / "scripts" / "artifact_registry.sh",
+        ws / "vendor" / "antigravity-workbench" / "scripts" / "artifact_registry.sh",
+    )
 
     (ws / "web" / "package.json").write_text('{"name": "ask-workbench-web"}\n', encoding="utf-8")
     (ws / "web" / "package-lock.json").write_text(
