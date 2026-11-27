@@ -13,7 +13,7 @@ Web UI and Antigravity SDK backend living alongside the `ask-ask-something` plug
   - Provides a **human-only** `deploy_service` triggered strictly from the UI's **Deploy to DEV** and **Deploy to UAT** buttons (`git push origin main` scoped to the active service directory; supports both direct UAT pushes when editing UAT directly and DEV → UAT promotion while preserving UAT's `src/config.py` and guarding against overlapping direct UAT edits).
 - **`app/web/`** (Next.js App Router + BFF, port `3000`):
   - Uses `useAgentWorkbench`, `AgentWorkbench` (multi-tab sessions, interrupt-and-append, inline rename, searchable session picker, 4-way execution mode toggle, file preview), and `AuthLoginModal` from `app/vendor/antigravity-workbench/ui/src/`.
-  - Proxies workbench endpoints through `/api/workbench/[...path]` (`createWorkbenchCatchAllHandlers()`) alongside AskAsk*-specific `/api/workspaces/*` and `/api/uat/*` routes so a single port (`3000`) serves the entire app in Cloud Shell Web Preview.
+  - Proxies workbench endpoints through `/api/workbench/[...path]` (`createWorkbenchCatchAllHandlers()`) and AskAsk* endpoints (`/api/health`, `/api/projects/*`, `/api/eval/*`, `/api/workspaces/*`) through `/api/[[...path]]` (`createScopedProxyHandlers()`) so a single port (`3000`) serves the entire app in Cloud Shell Web Preview.
 
 ## First-Time Setup on Cloud Shell
 
