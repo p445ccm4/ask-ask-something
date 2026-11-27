@@ -28,6 +28,14 @@ for arg in "$@"; do
   esac
 done
 
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+if [[ -d "/opt/micromamba/bin" ]] && [[ ":$PATH:" != *":/opt/micromamba/bin:"* ]]; then
+  export PATH="$PATH:/opt/micromamba/bin"
+fi
+
 "$APP_DIR/setup_mounts.sh"
 
 AGENT_PORT="${AGENT_SERVICE_PORT:-8000}"
@@ -36,7 +44,9 @@ WEB_PORT="${PORT:-3000}"
 if [[ -z "${NEXT_PUBLIC_BASE_PATH+x}" ]]; then
   if [[ "${CLOUD_SHELL:-}" == "true" ]]; then
     NEXT_PUBLIC_BASE_PATH=""
-  elif [[ -n "${JUPYTER_SERVER_ROOT:-}${JUPYTER_SERVER_URL:-}${JUPYTER_RUNTIME_DIR:-}${JPY_PARENT_PID:-}${DL_ANACONDA_HOME:-}" ]] \
+  elif [[ "${IS_WORKBENCH_IMAGE:-}" == "true" ]] \
+    || [[ "${VERTEX_PRODUCT:-}" == "WORKBENCH_INSTANCE" ]] \
+    || [[ -n "${JUPYTER_SERVER_ROOT:-}${JUPYTER_SERVER_URL:-}${JUPYTER_RUNTIME_DIR:-}${JPY_PARENT_PID:-}${DL_ANACONDA_HOME:-}" ]] \
     || [[ "${HOME:-}" == "/home/jupyter" ]] \
     || [[ -d "/opt/deeplearning" ]] \
     || [[ -f "/etc/jupyter/jupyter_server_config.py" ]] \
